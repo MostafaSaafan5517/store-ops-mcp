@@ -158,7 +158,8 @@ describe('row level security: the app role cannot bypass it', () => {
        from pg_class c join pg_namespace n on n.oid = c.relnamespace
        where n.nspname = 'store_ops' and c.relkind = 'r' order by c.relname`,
     );
-    expect(rows.map((row) => row.relname).sort()).toEqual([...STORE_TABLES].sort());
+    // users holds no store data; the app role reaches it only through sign-in functions.
+    expect(rows.map((row) => row.relname).sort()).toEqual([...STORE_TABLES, 'users'].sort());
     for (const row of rows) {
       expect(row.relrowsecurity, row.relname).toBe(true);
       expect(row.relforcerowsecurity, row.relname).toBe(true);
