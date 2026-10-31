@@ -39,22 +39,32 @@ ChatGPT and other MCP clients. Public portfolio project. Everything runs on demo
 ## Layout
 
 - `src/config.ts`: product name and other constants (the only place the name lives)
-- `src/domain.ts`: order statuses and which of them count as sales
-- `src/server.ts`: `createStoreOpsServer({ db, principal })`, the MCP server factory
-- `src/tools/`: one file per tool group; `src/tools/shared.ts` holds helpers
+- `src/domain.ts`: order statuses, which count as sales, which can be cancelled or refunded
+- `src/errors.ts`: `ToolError`, the only errors whose message reaches the client
+- `src/server.ts`: `createStoreOpsServer({ db, principal, payments, approvalBaseUrl })`, the
+  MCP server factory
+- `src/approvals.ts`: canonical argument hashing, approval storage, `approveAction` and
+  `getApproval` (the approval page in Run 3 calls these)
+- `src/tools/`: one file per tool group; `src/tools/shared.ts` holds helpers;
+  `src/tools/approval-flow.ts` runs every write tool through the approval flow
+- `src/payments/`: `PaymentsAdapter`, the fake processor, the Stripe test mode client and
+  `selectPayments`
 - `src/db/`: `Database` interface, `withPrincipal`, PGlite adapter (Node only), migrations runner
 - `src/seed/`: deterministic demo store generator (`generateDemoStore`) and provisioning
   (`ensureDemoStore` gives each user their own Demo Store)
-- `src/local-env.ts`: stdio credentials from env (`STORE_OPS_USER_ID`, `STORE_OPS_DATA_DIR`)
+- `src/local-env.ts`: stdio settings from env (see `.env.example`)
+- `src/local-approvals.ts`: folder inbox for `pnpm approve` decisions (Node only)
 - `src/stdio.ts`: local stdio entry (Node only), served through the SDK `serveStdio`
 - `scripts/seed.ts`: `pnpm seed` creates or reports the local Demo Store
+- `scripts/approve.ts`: `pnpm approve <approval_id> [--reject]` for local demos
 - `migrations/`: plain SQL, applied in file name order
 - `tests/`: Vitest suites
 
 ## Conventions
 
 - Keep everything under `src/` runtime-agnostic (web-standard APIs only). Node imports are
-  allowed only in `src/stdio.ts` and `src/db/pglite.ts` (ESLint enforces this).
+  allowed only in `src/stdio.ts`, `src/db/pglite.ts` and `src/local-approvals.ts` (ESLint
+  enforces this).
 - All data access goes through `withPrincipal(db, principal, fn)`, which runs one transaction
   with `store_ops.user_id` and `store_ops.store_id` set via `set_config(..., true)` as the
   non-owner role `store_ops_app`. Never query store tables outside it.
@@ -67,6 +77,37 @@ ChatGPT and other MCP clients. Public portfolio project. Everything runs on demo
 - Logging in the stdio server goes to stderr only (stdout is the protocol channel).
 - Unexpected errors inside tools go to `onError` and the client gets a generic message, so
   SQL or driver details never leak. Throw `ToolError` for messages meant for the client.
+- Each user owns exactly one store. `ensureDemoStore` provisions it in one transaction under a
+  per-user advisory lock (`store_ops.ensure_owned_store`); a unique index backs this up.
+
+## Approval flow (write tools)
+
+- A write tool is a `WriteToolSpec`: `plan` validates and describes the exact effect (no
+  writes); `execute` applies the stored effect and re-checks it against current data.
+- First call (no `approval_id`): stores a pending approval bound to store, user, tool and
+  `hashArgs` (SHA-256 of canonical JSON, keys sorted) of the arguments, expiring in 10 minutes.
+  If the request declares form elicitation (2026-07-28 envelope), the tool returns
+  `input_required` with a confirm request; the retry carries the approval id in
+  `requestState` (untrusted, used only as a lookup key). Otherwise it returns
+  `approval_required` with `approval_url` (`<approvalBaseUrl>/approve/<id>`).
+- Second call (same arguments plus `approval_id`) runs only if approved, in one transaction:
+  lock the approval (`for update`), check tool, hash, status and expiry, execute, insert one
+  `audit_log` row, mark executed with the stored result. A repeat returns the stored result.
+- Rejected, expired, used, mismatched, other user or other store: `isError` with a clear
+  message, nothing changes. A trigger blocks rewriting an approval or moving it backwards.
+- 2025-era clients cannot receive `input_required`, so they always get the approval link.
+- Local stdio: PGlite allows one connection, so `pnpm approve` writes a decision file to
+  `STORE_OPS_APPROVALS_DIR` and the server applies it on the next call with that approval id.
+
+## Payments
+
+- Tests always use `createFakePayments()`; they never call Stripe.
+- Demo orders carry fake payment references (`pi_demo_<n>`), so refunds use the fake processor
+  unless `STRIPE_SECRET_KEY` is set. A set key must start with `sk_test_` or startup fails.
+- With a key, the Stripe client refuses demo references (only real test PaymentIntents can be
+  refunded) and sends the approval id as the Idempotency-Key.
+- The Stripe call happens inside the approval transaction. If the commit fails after Stripe
+  succeeded, the retry reuses the same key, so Stripe returns the same refund.
 
 ## Protocol and testing notes
 
@@ -80,12 +121,16 @@ ChatGPT and other MCP clients. Public portfolio project. Everything runs on demo
 - PGlite has a single superuser session, so the app role is applied with `SET LOCAL ROLE`, and
   SQL inside a transaction could `RESET ROLE`. Never run SQL from tool input. On real Postgres
   the app must log in as a role that is only a member of `store_ops_app`.
+- PGlite also runs transactions one at a time, so concurrency tests there (two first
+  requests, two executions of one approval) prove the outcome but not the locks. The Run 3
+  Docker Postgres harness must run them with real parallel connections.
 
 ## Run plan (Phase 1)
 
 1. Scaffold, schema with RLS, demo seed, read tools, stdio entry, tests. (done 2026-10-31)
 2. Write tools (`adjust_stock`, `cancel_order`, `issue_refund`, `add_order_note`), approvals,
    idempotency, audit log writes, Stripe adapter (fake in tests, test-mode client with a key).
+   (done 2026-10-31 on `feat/write-tools`, not merged)
 3. Real Postgres test harness in Docker (login role that is only a member of `store_ops_app`,
    RLS tests on both PGlite and Postgres), then Streamable HTTP on a Worker, OAuth provider,
    GitHub login and a one-click demo login, consent, protected resource metadata, 401/403
