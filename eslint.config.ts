@@ -28,5 +28,11 @@ export default tseslint.config(
       ],
     },
   },
+  {
+    // Claude Code hooks are plain JS typed with JSDoc. typescript-eslint cannot see JSDoc
+    // casts, so it reports the cast `JSON.parse` result of the hook input as `any`.
+    files: ['.claude/hooks/*.mjs'],
+    rules: { '@typescript-eslint/no-unsafe-assignment': 'off' },
+  },
   prettier,
 );
