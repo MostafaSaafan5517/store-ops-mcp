@@ -12,7 +12,8 @@ ChatGPT and other MCP clients. Public portfolio project. Everything runs on demo
 - Postgres with RLS. Production: Neon through Cloudflare Hyperdrive. PGlite for fast tests and
   local dev; real Postgres in Docker for security and integration tests (Run 3)
 - Vitest, ESLint (zero warnings), Prettier
-- Later: Cloudflare Workers (Streamable HTTP) and OAuth via `@cloudflare/workers-oauth-provider`
+- Cloudflare Workers (Streamable HTTP via `createMcpHandler`) and OAuth via
+  `@cloudflare/workers-oauth-provider` 1.2.4; `wrangler` is a dev dependency (never global)
 
 ## Non-negotiable rules
 
@@ -49,16 +50,25 @@ ChatGPT and other MCP clients. Public portfolio project. Everything runs on demo
   `src/tools/approval-flow.ts` runs every write tool through the approval flow
 - `src/payments/`: `PaymentsAdapter`, the fake processor, the Stripe test mode client and
   `selectPayments`
-- `src/db/`: `Database` interface, `withPrincipal`, PGlite adapter (Node only), migrations runner
+- `src/db/`: `Database` interface, `withPrincipal`, PGlite adapter (Node only), migrations runner,
+  `postgres.ts` (pg through Hyperdrive, one connection per transaction, `SET LOCAL ROLE`)
+- `src/users.ts`: GitHub and demo users mapped to internal UUIDs (security definer functions)
 - `src/seed/`: deterministic demo store generator (`generateDemoStore`) and provisioning
   (`ensureDemoStore` gives each user their own Demo Store)
 - `src/local-env.ts`: stdio settings from env (see `.env.example`)
 - `src/local-approvals.ts`: folder inbox for `pnpm run approve` decisions (Node only)
 - `src/stdio.ts`: local stdio entry (Node only), served through the SDK `serveStdio`
+- `src/worker.ts`: Worker entry (Hyperdrive database); `wrangler.jsonc`, `.dev.vars.example`
+- `src/remote/`: the remote app, runtime specifics injected (`createRemoteApp(deps)`)
+  - `app.ts`: `OAuthProvider` setup and routing; `config.ts`: env checks and types
+  - `mcp-endpoint.ts`: `/mcp`, principal from token props, per-tool scope check (`scopes.ts`)
+  - `auth-routes.ts`: `/authorize` (sign-in, consent), `/login/demo`, `/login/github(/callback)`
+  - `approval-routes.ts`: `/approve/<id>`; `pages.ts`, `html.ts`: server-rendered HTML
+  - `session.ts`: HMAC-signed `__Host-` session cookie and CSRF; `github.ts`; `redirects.ts`
 - `scripts/seed.ts`: `pnpm seed` creates or reports the local Demo Store
 - `scripts/approve.ts`: `pnpm run approve <approval_id> [--reject]` for local demos
 - `migrations/`: plain SQL, applied in file name order
-- `tests/`: Vitest suites
+- `tests/`: Vitest suites; `tests/support/` holds the Workers stand-ins and the remote harness
 
 ## Conventions
 
@@ -77,6 +87,15 @@ ChatGPT and other MCP clients. Public portfolio project. Everything runs on demo
 - Logging in the stdio server goes to stderr only (stdout is the protocol channel).
 - Unexpected errors inside tools go to `onError` and the client gets a generic message, so
   SQL or driver details never leak. Throw `ToolError` for messages meant for the client.
+- Remote: the principal comes only from the token props (`userId`, `storeId`, set at consent from
+  the session). Never read a store or user from a header, query or body.
+- Remote pages: escape every client-provided string (`escapeHtml`), every POST checks
+  `Csrf.check` (HMAC token plus Origin), and an unknown approval must render exactly like
+  someone else's (`APPROVAL_NOT_FOUND`).
+- Scopes: `store:read` baseline; `store:write` for adjust_stock, cancel_order, add_order_note;
+  plus `refunds:write` for issue_refund. Adding a write tool means adding it to `scopes.ts`.
+- Redirects are limited by `src/remote/redirects.ts` (claude.ai and ChatGPT callbacks exact,
+  loopback http any port), on top of the provider's exact match to registered URIs.
 - Each user owns exactly one store. `ensureDemoStore` provisions it in one transaction under a
   per-user advisory lock (`store_ops.ensure_owned_store`); a unique index backs this up.
 
@@ -125,6 +144,21 @@ ChatGPT and other MCP clients. Public portfolio project. Everything runs on demo
   requests, two executions of one approval) prove the outcome but not the locks. The Run 3
   Docker Postgres harness must run them with real parallel connections.
 
+## Remote server notes
+
+- `PUBLIC_BASE_URL` is the issuer and the token audience is `<origin>/mcp`. Requests on another
+  host name (for example `127.0.0.1` when the base is `localhost`) get a 401 without
+  `resource_metadata`, by design of the provider.
+- The provider sends `iss` on every authorization response and advertises
+  `authorization_response_iss_parameter_supported` (verified in its source and docs).
+- CIMD is advertised only with the `global_fetch_strictly_public` compatibility flag. Tests set
+  it on `globalThis.Cloudflare` (`tests/support/workers-runtime.ts`).
+- Remote tests run in Node: Vitest aliases `cloudflare:workers` and inlines the provider, KV is
+  `tests/support/memory-kv.ts`, and `Date` fake timers expire tokens and approvals.
+- Demo users expire after 24 hours (session, MCP endpoint and refresh check it). Their stores are
+  kept for now; cleanup conflicts with the append-only `audit_log` and is a deploy-step decision.
+- `pnpm approve` is a pnpm 12 built-in, so the local approval script is `pnpm run approve`.
+
 ## Claude Code setup
 
 Project-level only, all in `.claude/` (settings in `.claude/settings.json`). Hooks are Node
@@ -147,9 +181,16 @@ scripts typed with JSDoc and checked by `tsc` and ESLint like the rest of the re
 1. Scaffold, schema with RLS, demo seed, read tools, stdio entry, tests. (done 2026-10-31)
 2. Write tools (`adjust_stock`, `cancel_order`, `issue_refund`, `add_order_note`), approvals,
    idempotency, audit log writes, Stripe adapter (fake in tests, test-mode client with a key).
-   (done 2026-10-31 on `feat/write-tools`, not merged)
-3. Real Postgres test harness in Docker (login role that is only a member of `store_ops_app`,
-   RLS tests on both PGlite and Postgres), then Streamable HTTP on a Worker, OAuth provider,
-   GitHub login and a one-click demo login, consent, protected resource metadata, 401/403
-   behaviour, audience checks, approval page, tests.
+   (done 2026-10-31, on main)
+3. Run 3a (done 2026-11-01 on `feat/remote-server`, not merged): Streamable HTTP on a Worker,
+   OAuth provider, GitHub login and demo login, consent, protected resource metadata, 401/403
+   behaviour, audience checks, approval page, tests (Node plus PGlite).
+   Run 3b (needs Docker): real Postgres harness (login role that is only a member of
+   `store_ops_app`), RLS and remote tests on Postgres, the Hyperdrive adapter on Postgres,
+   lock proofs with parallel connections, migrations 0002 to 0004 on Postgres (check that the
+   security definer functions work when the owner does not bypass RLS, since every table uses
+   FORCE ROW LEVEL SECURITY).
+   Deploy step (each item after Mostafa's yes): Cloudflare KV and Hyperdrive, Neon, GitHub OAuth
+   App, secrets, a rate limit on `/login/demo`, demo store cleanup rule, a cron for
+   `purgeExpiredData`, then connecting from Claude and ChatGPT.
 4. README (Claude Desktop, Claude Code, MCP Inspector setup), CI workflow, demo script.
