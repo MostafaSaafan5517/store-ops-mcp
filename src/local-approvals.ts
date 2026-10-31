@@ -12,7 +12,7 @@ function fileFor(dir: string, approvalId: string): string {
 }
 
 /**
- * Records a decision from the local `pnpm approve` command. PGlite allows one connection, so
+ * Records a decision from the local `pnpm run approve` command. PGlite allows one connection, so
  * the command cannot write to the database while the stdio server has it open; it leaves the
  * decision in a folder instead, and the server applies it.
  */

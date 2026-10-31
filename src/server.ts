@@ -18,7 +18,7 @@ export interface StoreOpsServerOptions {
   payments: PaymentsAdapter;
   /** Base URL of the approval page; approval links are `<base>/approve/<id>`. */
   approvalBaseUrl: string;
-  /** Local stdio mode only: decisions from `pnpm approve`, and the command to show. */
+  /** Local stdio mode only: decisions from `pnpm run approve`, and the command to show. */
   localApproval?: { inbox: ApprovalInbox; command: (approvalId: string) => string };
   now?: () => Date;
   onError?: (error: unknown) => void;

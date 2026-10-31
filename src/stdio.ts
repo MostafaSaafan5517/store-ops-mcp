@@ -27,7 +27,7 @@ const handle = serveStdio(
       approvalBaseUrl: env.approvalBaseUrl,
       localApproval: {
         inbox: createFileApprovalInbox(env.approvalsDir),
-        command: (approvalId) => `pnpm approve ${approvalId}`,
+        command: (approvalId) => `pnpm run approve ${approvalId}`,
       },
       onError: (error) =>
         log(`Tool error: ${error instanceof Error ? error.message : String(error)}`),

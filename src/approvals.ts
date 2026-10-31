@@ -208,7 +208,7 @@ export function getApproval(
 
 /**
  * Records a human decision on a pending approval. Called by the approval page (Run 3), the
- * in-chat confirmation and the local `pnpm approve` command. Only the user who prepared the
+ * in-chat confirmation and the local `pnpm run approve` command. Only the user who prepared the
  * action, in the same store, can decide, and only before it expires.
  */
 export function approveAction(
@@ -248,7 +248,7 @@ export async function decideLocked(
 }
 
 /**
- * Decisions recorded outside the server process (the local `pnpm approve` command). The
+ * Decisions recorded outside the server process (the local `pnpm run approve` command). The
  * server applies a decision with the same checks as `approveAction` when the approval is
  * next used, then forgets it.
  */

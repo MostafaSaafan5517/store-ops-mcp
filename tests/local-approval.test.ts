@@ -27,7 +27,7 @@ beforeAll(async () => {
   mcp = await connectClient(local.app, store, new Date(), {
     localApproval: {
       inbox: createFileApprovalInbox(dir),
-      command: (approvalId) => `pnpm approve ${approvalId}`,
+      command: (approvalId) => `pnpm run approve ${approvalId}`,
     },
   });
 });
@@ -71,10 +71,10 @@ describe('local approval in stdio mode', () => {
       'adjust_stock',
       args,
     );
-    expect(first.approval.approve_command).toBe(`pnpm approve ${first.approval_id}`);
+    expect(first.approval.approve_command).toBe(`pnpm run approve ${first.approval_id}`);
 
     const pending = await mcp.call('adjust_stock', { ...args, approval_id: first.approval_id });
-    expect(textOf(pending)).toContain(`or by running: pnpm approve ${first.approval_id}`);
+    expect(textOf(pending)).toContain(`or by running: pnpm run approve ${first.approval_id}`);
 
     await recordLocalDecision(dir, first.approval_id, 'approve');
     const done = await mcp.call('adjust_stock', { ...args, approval_id: first.approval_id });
@@ -94,7 +94,7 @@ describe('local approval in stdio mode', () => {
   });
 });
 
-describe('pnpm approve', () => {
+describe('pnpm run approve', () => {
   const cli = (args: string[]) =>
     run(process.execPath, ['--import', 'tsx', 'scripts/approve.ts', ...args], {
       env: { PATH: process.env.PATH ?? '', STORE_OPS_APPROVALS_DIR: dir },
@@ -111,7 +111,7 @@ describe('pnpm approve', () => {
 
   it('fails with a clear message for a missing or invalid id', async () => {
     // A rejected execFile promise means a non-zero exit; its message includes stderr.
-    await expect(cli([])).rejects.toThrow(/Usage: pnpm approve/);
+    await expect(cli([])).rejects.toThrow(/Usage: pnpm run approve/);
     await expect(cli(['not-an-id'])).rejects.toThrow(/must be a UUID/);
   });
 });

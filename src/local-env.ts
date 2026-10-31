@@ -5,7 +5,7 @@ export const DEFAULT_LOCAL_USER_ID = '00000000-0000-4000-8000-000000000001';
 
 export const DEFAULT_DATA_DIR = '.data/pglite';
 
-/** Where `pnpm approve` leaves decisions for the running stdio server. */
+/** Where `pnpm run approve` leaves decisions for the running stdio server. */
 export const DEFAULT_APPROVALS_DIR = '.data/approvals';
 
 /** Where the approval page will run locally (`wrangler dev` default port, Run 3). */
@@ -17,7 +17,7 @@ export interface LocalEnv {
   dataDir: string;
   /** Base URL for approval links (`<base>/approve/<id>`). */
   approvalBaseUrl: string;
-  /** Folder for decisions from `pnpm approve`. */
+  /** Folder for decisions from `pnpm run approve`. */
   approvalsDir: string;
 }
 

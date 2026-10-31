@@ -1,13 +1,13 @@
 import { readLocalEnv } from '../src/local-env.js';
 import { recordLocalDecision } from '../src/local-approvals.js';
 
-// Usage: pnpm approve <approval_id> [--reject]
+// Usage: pnpm run approve <approval_id> [--reject]
 const args = process.argv.slice(2).filter((arg) => arg !== '--');
 const reject = args.includes('--reject');
 const approvalId = args.find((arg) => !arg.startsWith('--'));
 
 if (!approvalId) {
-  process.stderr.write('Usage: pnpm approve <approval_id> [--reject]\n');
+  process.stderr.write('Usage: pnpm run approve <approval_id> [--reject]\n');
   process.exit(1);
 }
 

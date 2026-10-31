@@ -53,10 +53,10 @@ ChatGPT and other MCP clients. Public portfolio project. Everything runs on demo
 - `src/seed/`: deterministic demo store generator (`generateDemoStore`) and provisioning
   (`ensureDemoStore` gives each user their own Demo Store)
 - `src/local-env.ts`: stdio settings from env (see `.env.example`)
-- `src/local-approvals.ts`: folder inbox for `pnpm approve` decisions (Node only)
+- `src/local-approvals.ts`: folder inbox for `pnpm run approve` decisions (Node only)
 - `src/stdio.ts`: local stdio entry (Node only), served through the SDK `serveStdio`
 - `scripts/seed.ts`: `pnpm seed` creates or reports the local Demo Store
-- `scripts/approve.ts`: `pnpm approve <approval_id> [--reject]` for local demos
+- `scripts/approve.ts`: `pnpm run approve <approval_id> [--reject]` for local demos
 - `migrations/`: plain SQL, applied in file name order
 - `tests/`: Vitest suites
 
@@ -96,7 +96,7 @@ ChatGPT and other MCP clients. Public portfolio project. Everything runs on demo
 - Rejected, expired, used, mismatched, other user or other store: `isError` with a clear
   message, nothing changes. A trigger blocks rewriting an approval or moving it backwards.
 - 2025-era clients cannot receive `input_required`, so they always get the approval link.
-- Local stdio: PGlite allows one connection, so `pnpm approve` writes a decision file to
+- Local stdio: PGlite allows one connection, so `pnpm run approve` writes a decision file to
   `STORE_OPS_APPROVALS_DIR` and the server applies it on the next call with that approval id.
 
 ## Payments

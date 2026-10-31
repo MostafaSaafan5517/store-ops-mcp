@@ -93,7 +93,7 @@ describe('stdio server', () => {
         approval: { approve_command: string };
       };
       expect(prepared.status).toBe('approval_required');
-      expect(prepared.approval.approve_command).toBe(`pnpm approve ${prepared.approval_id}`);
+      expect(prepared.approval.approve_command).toBe(`pnpm run approve ${prepared.approval_id}`);
 
       await recordLocalDecision(approvalsDir, prepared.approval_id, 'approve');
       const done = await client.callTool({
