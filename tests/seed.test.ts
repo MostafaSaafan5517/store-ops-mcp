@@ -1,11 +1,11 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { LocalDatabase } from '../src/db/pglite.js';
-import { listStoreIdsForUser, withPrincipal } from '../src/db/principal.js';
+import { listStoreIdsForUser, withPrincipal, withUser } from '../src/db/principal.js';
 import { ORDER_STATUSES } from '../src/domain.js';
 import { FAKE_SURNAMES, FIRST_NAMES } from '../src/seed/catalog.js';
 import { generateDemoStore } from '../src/seed/demo-store.js';
 import { ensureDemoStore } from '../src/seed/provision.js';
-import { openTestDatabase, USER_A, USER_B } from './helpers.js';
+import { openTestDatabase, USER_A, USER_B, USER_C } from './helpers.js';
 
 const NOW = new Date('2026-10-31T12:00:00Z');
 const DAY_MS = 86_400_000;
@@ -98,6 +98,23 @@ describe('ensureDemoStore', () => {
       return rows[0];
     });
     expect(counts).toEqual({ products: 40, orders: 200, customers: 60, name: 'Demo Store' });
+  });
+
+  it('creates exactly one store when two first requests arrive at the same time', async () => {
+    const results = await Promise.all([
+      ensureDemoStore(local.app, USER_C, NOW),
+      ensureDemoStore(local.app, USER_C, NOW),
+    ]);
+    const storeIds = await listStoreIdsForUser(local.app, USER_C);
+    expect(storeIds).toHaveLength(1);
+    expect(results.map((result) => result.principal.storeId)).toEqual([storeIds[0], storeIds[0]]);
+    expect(results.filter((result) => result.created)).toHaveLength(1);
+  });
+
+  it('the database allows only one owned store per user', async () => {
+    await expect(
+      withUser(local.app, USER_C, (tx) => tx.query("select store_ops.create_store('Demo Store')")),
+    ).rejects.toThrow(/store_members_one_owned_store/);
   });
 });
 
