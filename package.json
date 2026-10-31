@@ -20,15 +20,19 @@
     "approve": "tsx scripts/approve.ts"
   },
   "dependencies": {
+    "@cloudflare/workers-oauth-provider": "1.2.4",
     "@electric-sql/pglite": "0.5.14",
     "@modelcontextprotocol/server": "2.4.0",
+    "pg": "8.23.1",
     "stripe": "23.1.0",
     "zod": "4.6.7"
   },
   "devDependencies": {
+    "@cloudflare/workers-types": "^5.20261030.1",
     "@eslint/js": "10.0.1",
     "@modelcontextprotocol/client": "2.4.0",
     "@types/node": "^24.19.2",
+    "@types/pg": "^8.23.1",
     "eslint": "10.14.0",
     "eslint-config-prettier": "^10.1.8",
     "jiti": "^2.7.0",
@@ -36,6 +40,7 @@
     "tsx": "4.23.15",
     "typescript": "6.0.3",
     "typescript-eslint": "8.72.1",
-    "vitest": "5.0.5"
+    "vitest": "5.0.5",
+    "wrangler": "4.156.0"
   }
 }
