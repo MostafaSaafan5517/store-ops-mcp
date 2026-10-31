@@ -4,9 +4,11 @@ import { join } from 'node:path';
 import { Client } from '@modelcontextprotocol/client';
 import { StdioClientTransport } from '@modelcontextprotocol/client/stdio';
 import { afterAll, describe, expect, it } from 'vitest';
+import { recordLocalDecision } from '../src/local-approvals.js';
 
 const USER_ID = '00000000-0000-4000-8000-0000000000d1';
 const dataDir = mkdtempSync(join(tmpdir(), 'store-ops-stdio-'));
+const approvalsDir = join(dataDir, 'approvals');
 
 afterAll(() => {
   rmSync(dataDir, { recursive: true, force: true });
@@ -20,7 +22,12 @@ async function withStdioClient<T>(
     command: process.execPath,
     args: ['--import', 'tsx', 'src/stdio.ts'],
     cwd: process.cwd(),
-    env: { STORE_OPS_USER_ID: USER_ID, STORE_OPS_DATA_DIR: dataDir, PATH: process.env.PATH ?? '' },
+    env: {
+      STORE_OPS_USER_ID: USER_ID,
+      STORE_OPS_DATA_DIR: join(dataDir, 'pglite'),
+      STORE_OPS_APPROVALS_DIR: approvalsDir,
+      PATH: process.env.PATH ?? '',
+    },
     stderr: 'pipe',
   });
   let stderr = '';
@@ -73,6 +80,31 @@ describe('stdio server', () => {
       expect(stderr()).toMatch(/Opened Demo Store/);
       expect(firstStoreId).toBeDefined();
       expect(storeIdIn(stderr())).toBe(firstStoreId);
+    });
+  });
+
+  it('runs a write tool end to end with a local approval', async () => {
+    await withStdioClient('legacy', async (client) => {
+      const args = { sku: 'KIT-001', quantity_change: 1, reason: 'Found one more' };
+      const first = await client.callTool({ name: 'adjust_stock', arguments: args });
+      const prepared = first.structuredContent as {
+        status: string;
+        approval_id: string;
+        approval: { approve_command: string };
+      };
+      expect(prepared.status).toBe('approval_required');
+      expect(prepared.approval.approve_command).toBe(`pnpm approve ${prepared.approval_id}`);
+
+      await recordLocalDecision(approvalsDir, prepared.approval_id, 'approve');
+      const done = await client.callTool({
+        name: 'adjust_stock',
+        arguments: { ...args, approval_id: prepared.approval_id },
+      });
+      expect(done.isError).toBeFalsy();
+      expect(done.structuredContent).toMatchObject({
+        status: 'executed',
+        result: { sku: 'KIT-001', quantity_change: 1 },
+      });
     });
   });
 });

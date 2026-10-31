@@ -1,6 +1,7 @@
 import { serveStdio } from '@modelcontextprotocol/server/stdio';
 import { PRODUCT_NAME } from './config.js';
 import { openLocalDatabase } from './db/pglite.js';
+import { createFileApprovalInbox } from './local-approvals.js';
 import { readLocalEnv } from './local-env.js';
 import { selectPayments } from './payments/select.js';
 import { ensureDemoStore } from './seed/provision.js';
@@ -24,6 +25,10 @@ const handle = serveStdio(
       principal,
       payments,
       approvalBaseUrl: env.approvalBaseUrl,
+      localApproval: {
+        inbox: createFileApprovalInbox(env.approvalsDir),
+        command: (approvalId) => `pnpm approve ${approvalId}`,
+      },
       onError: (error) =>
         log(`Tool error: ${error instanceof Error ? error.message : String(error)}`),
     }),

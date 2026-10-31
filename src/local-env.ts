@@ -5,6 +5,9 @@ export const DEFAULT_LOCAL_USER_ID = '00000000-0000-4000-8000-000000000001';
 
 export const DEFAULT_DATA_DIR = '.data/pglite';
 
+/** Where `pnpm approve` leaves decisions for the running stdio server. */
+export const DEFAULT_APPROVALS_DIR = '.data/approvals';
+
 /** Where the approval page will run locally (`wrangler dev` default port, Run 3). */
 export const DEFAULT_APPROVAL_BASE_URL = 'http://localhost:8787';
 
@@ -14,6 +17,8 @@ export interface LocalEnv {
   dataDir: string;
   /** Base URL for approval links (`<base>/approve/<id>`). */
   approvalBaseUrl: string;
+  /** Folder for decisions from `pnpm approve`. */
+  approvalsDir: string;
 }
 
 /**
@@ -30,5 +35,6 @@ export function readLocalEnv(env: Record<string, string | undefined>): LocalEnv 
   if (!URL.canParse(approvalBaseUrl)) {
     throw new Error('STORE_OPS_APPROVAL_BASE_URL must be an absolute URL');
   }
-  return { userId, dataDir, approvalBaseUrl };
+  const approvalsDir = env.STORE_OPS_APPROVALS_DIR?.trim() || DEFAULT_APPROVALS_DIR;
+  return { userId, dataDir, approvalBaseUrl, approvalsDir };
 }

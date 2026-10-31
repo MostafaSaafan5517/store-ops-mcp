@@ -16,7 +16,8 @@
     "format:check": "prettier --check .",
     "test": "vitest run",
     "dev:stdio": "tsx src/stdio.ts",
-    "seed": "tsx scripts/seed.ts"
+    "seed": "tsx scripts/seed.ts",
+    "approve": "tsx scripts/approve.ts"
   },
   "dependencies": {
     "@electric-sql/pglite": "0.5.14",
