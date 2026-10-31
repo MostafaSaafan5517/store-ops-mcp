@@ -2,6 +2,7 @@ import type { CallToolResult, ToolAnnotations } from '@modelcontextprotocol/serv
 import { z } from 'zod';
 import { withPrincipal } from '../db/principal.js';
 import type { Database, Principal, SqlClient } from '../db/types.js';
+import { ToolError } from '../errors.js';
 
 /** Everything a tool needs. The principal comes from auth, never from tool arguments. */
 export interface ToolContext {
@@ -11,9 +12,6 @@ export interface ToolContext {
   /** Receives unexpected errors. The client only sees a generic message. */
   onError: (error: unknown) => void;
 }
-
-/** A business error that is safe to show to the client as is. */
-export class ToolError extends Error {}
 
 export const READ_ONLY: ToolAnnotations = {
   readOnlyHint: true,

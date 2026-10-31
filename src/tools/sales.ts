@@ -1,5 +1,6 @@
 import type { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
+import { ToolError } from '../errors.js';
 import { ORDER_STATUSES, SALE_STATUSES } from '../domain.js';
 import { utcDayStart, utcNextDayStart } from './orders.js';
 import {
@@ -8,7 +9,6 @@ import {
   runRead,
   storeCurrency,
   toInt,
-  ToolError,
   type ToolContext,
 } from './shared.js';
 

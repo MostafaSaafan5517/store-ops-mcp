@@ -1,5 +1,6 @@
 import type { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
+import { ToolError } from '../errors.js';
 import { ORDER_STATUSES } from '../domain.js';
 import {
   centsSchema,
@@ -16,7 +17,6 @@ import {
   toInt,
   toIso,
   toIsoOrNull,
-  ToolError,
   UNTRUSTED_NOTE,
   type ToolContext,
 } from './shared.js';

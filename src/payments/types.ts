@@ -1,3 +1,5 @@
+import { ToolError } from '../errors.js';
+
 /** What the refund tool asks a payment processor to do. Money is integer cents. */
 export interface RefundRequest {
   /** The order's payment reference, for example a Stripe PaymentIntent id. */
@@ -21,4 +23,4 @@ export interface PaymentsAdapter {
 }
 
 /** A processor refusal whose message is safe to show to the client. */
-export class PaymentError extends Error {}
+export class PaymentError extends ToolError {}
