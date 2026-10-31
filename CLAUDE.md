@@ -125,6 +125,23 @@ ChatGPT and other MCP clients. Public portfolio project. Everything runs on demo
   requests, two executions of one approval) prove the outcome but not the locks. The Run 3
   Docker Postgres harness must run them with real parallel connections.
 
+## Claude Code setup
+
+Project-level only, all in `.claude/` (settings in `.claude/settings.json`). Hooks are Node
+scripts typed with JSDoc and checked by `tsc` and ESLint like the rest of the repo.
+
+- `hooks/guard.mjs` (PreToolUse, Edit/Write/MultiEdit): blocks em dashes in new text,
+  `pnpm-lock.yaml`, `.env*` except `.env.example`, and edits to migrations git already tracks.
+  Tested in `tests/claude-guard.test.ts`.
+- `hooks/format-lint.mjs` (PostToolUse): Prettier, then ESLint with zero warnings, on each
+  edited `.ts`, `.mts` or `.mjs` file. Lint problems are sent back to Claude.
+- `hooks/typecheck.mjs` (Stop): `pnpm typecheck`, short error list on failure.
+- `agents/store-ops-security-reviewer.md`: read-only reviewer for RLS, tool contracts, the
+  approval flow and payments. Run it before committing changes to migrations, `src/db/`,
+  `src/tools/`, approvals, payments or auth.
+- Skills: `/new-migration` and `/new-tool` (user-invoked only), `/inspect` (MCP Inspector CLI
+  smoke test over stdio).
+
 ## Run plan (Phase 1)
 
 1. Scaffold, schema with RLS, demo seed, read tools, stdio entry, tests. (done 2026-10-31)
