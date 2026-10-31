@@ -1,11 +1,9 @@
 import { mkdir, readdir, readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { PGlite } from '@electric-sql/pglite';
-import type { Database } from './types.js';
+import { APP_ROLE, type Database } from './types.js';
 
 const MIGRATIONS_DIR = fileURLToPath(new URL('../../migrations/', import.meta.url));
-
-export const APP_ROLE = 'store_ops_app';
 
 export interface LocalDatabase {
   /** Owner connection. Only for migrations and tests that check owner-level behaviour. */

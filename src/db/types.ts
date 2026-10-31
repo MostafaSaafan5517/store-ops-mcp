@@ -16,3 +16,6 @@ export interface Principal {
   userId: string;
   storeId: string;
 }
+
+/** The non-owner role every app transaction runs as, so RLS always applies. */
+export const APP_ROLE = 'store_ops_app';
