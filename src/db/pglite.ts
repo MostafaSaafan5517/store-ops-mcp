@@ -1,4 +1,4 @@
-import { readdir, readFile } from 'node:fs/promises';
+import { mkdir, readdir, readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { PGlite } from '@electric-sql/pglite';
 import type { Database } from './types.js';
@@ -47,6 +47,8 @@ export async function migrate(owner: PGlite): Promise<string[]> {
  * Postgres server the app logs in as a role that is only a member of `store_ops_app`.
  */
 export async function openLocalDatabase(dataDir?: string): Promise<LocalDatabase> {
+  const onDisk = dataDir !== undefined && !dataDir.includes('://');
+  if (onDisk) await mkdir(dataDir, { recursive: true });
   const owner = await PGlite.create(dataDir === undefined ? {} : { dataDir });
   await migrate(owner);
   const app: Database = {

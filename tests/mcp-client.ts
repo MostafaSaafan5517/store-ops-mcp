@@ -1,5 +1,6 @@
 import { Client, type CallToolResult } from '@modelcontextprotocol/client';
 import { InMemoryTransport } from '@modelcontextprotocol/server';
+import { serveStdio } from '@modelcontextprotocol/server/stdio';
 import type { Database, Principal } from '../src/db/types.js';
 import { createStoreOpsServer } from '../src/server.js';
 
@@ -15,22 +16,25 @@ export function textOf(result: CallToolResult): string {
   return result.content.map((block) => (block.type === 'text' ? block.text : '')).join('\n');
 }
 
-/** Connects an SDK client to a fresh server instance for `principal` over an in-memory pair. */
+/**
+ * Connects an SDK client to the server through the real stdio serving entry (which picks the
+ * protocol era), over an in-memory transport pair. The client pins the 2026-07-28 revision.
+ */
 export async function connectClient(
   db: Database,
   principal: Principal,
   now: Date,
   errors: unknown[] = [],
 ): Promise<TestClient> {
-  const server = createStoreOpsServer({
-    db,
-    principal,
-    now: () => now,
-    onError: (error) => errors.push(error),
-  });
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
-  await server.connect(serverTransport);
-  const client = new Client({ name: 'store-ops-tests', version: '0.0.0' });
+  const handle = serveStdio(
+    () => createStoreOpsServer({ db, principal, now: () => now, onError: (e) => errors.push(e) }),
+    { transport: serverTransport, onerror: (error) => errors.push(error) },
+  );
+  const client = new Client(
+    { name: 'store-ops-tests', version: '0.0.0' },
+    { versionNegotiation: { mode: { pin: '2026-07-28' } } },
+  );
   await client.connect(clientTransport);
 
   const call = (name: string, args: Record<string, unknown> = {}) =>
@@ -45,7 +49,7 @@ export async function connectClient(
     },
     async close() {
       await client.close();
-      await server.close();
+      await handle.close();
     },
   };
 }
