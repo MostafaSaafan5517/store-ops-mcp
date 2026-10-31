@@ -9,7 +9,8 @@ ChatGPT and other MCP clients. Public portfolio project. Everything runs on demo
 - MCP TypeScript SDK v2: `@modelcontextprotocol/server` (never v1 `@modelcontextprotocol/sdk`)
 - MCP spec 2026-07-28 (stateless core); 2025-era clients are served by the SDK's legacy mode
 - zod v4 for tool input and output schemas
-- Postgres with RLS (Supabase in production). PGlite for tests and local dev
+- Postgres with RLS. Production: Neon through Cloudflare Hyperdrive. PGlite for fast tests and
+  local dev; real Postgres in Docker for security and integration tests (Run 3)
 - Vitest, ESLint (zero warnings), Prettier
 - Later: Cloudflare Workers (Streamable HTTP) and OAuth via `@cloudflare/workers-oauth-provider`
 
@@ -30,8 +31,9 @@ ChatGPT and other MCP clients. Public portfolio project. Everything runs on demo
 - `audit_log` is append-only (trigger blocks UPDATE, DELETE and TRUNCATE; no grants).
 - Commits: Conventional Commits, author `Mostafa Saafan <mostafawork5517@gmail.com>`,
   no AI attribution, no Co-Authored-By trailer. One meaningful step per commit.
-- Ask Mostafa first: push, GitHub repo, PRs, deploys, creating Cloudflare/Supabase/Stripe
-  accounts or projects, global installs, spending money.
+- No Supabase anywhere (decided 2026-10-31).
+- Ask Mostafa first: push, GitHub repo, PRs, deploys, creating Cloudflare, Neon, GitHub OAuth
+  App or Stripe accounts or projects, global installs, spending money.
 - `pnpm typecheck`, `pnpm lint` and `pnpm test` must pass before every commit.
 
 ## Layout
@@ -56,7 +58,7 @@ ChatGPT and other MCP clients. Public portfolio project. Everything runs on demo
 - All data access goes through `withPrincipal(db, principal, fn)`, which runs one transaction
   with `store_ops.user_id` and `store_ops.store_id` set via `set_config(..., true)` as the
   non-owner role `store_ops_app`. Never query store tables outside it.
-- Tables live in the `store_ops` schema (not `public`, so Supabase's API roles never see them).
+- Tables live in the `store_ops` schema, not `public`.
 - Policies check both the current store and the user's membership in it, so changing one
   setting alone does not open another store.
 - Pagination: opaque cursors (base64url JSON of the keyset), `limit` capped at 50.
@@ -84,6 +86,8 @@ ChatGPT and other MCP clients. Public portfolio project. Everything runs on demo
 1. Scaffold, schema with RLS, demo seed, read tools, stdio entry, tests. (done 2026-10-31)
 2. Write tools (`adjust_stock`, `cancel_order`, `issue_refund`, `add_order_note`), approvals,
    idempotency, audit log writes, Stripe adapter (fake in tests, test-mode client with a key).
-3. Streamable HTTP on a Worker, OAuth provider, Supabase Auth login and consent, protected
-   resource metadata, 401/403 behaviour, audience checks, approval page, tests.
+3. Real Postgres test harness in Docker (login role that is only a member of `store_ops_app`,
+   RLS tests on both PGlite and Postgres), then Streamable HTTP on a Worker, OAuth provider,
+   GitHub login and a one-click demo login, consent, protected resource metadata, 401/403
+   behaviour, audience checks, approval page, tests.
 4. README (Claude Desktop, Claude Code, MCP Inspector setup), CI workflow, demo script.
