@@ -1,0 +1,10 @@
+# Copy to .dev.vars for `pnpm dev:worker` (wrangler dev). .dev.vars is git-ignored.
+PUBLIC_BASE_URL=http://localhost:8787
+# At least 32 random characters. Signs session and CSRF cookies.
+SESSION_SECRET=
+# Optional. A GitHub OAuth App with callback http://localhost:8787/login/github/callback.
+# Leave both empty to offer only "Try the demo".
+GITHUB_CLIENT_ID=
+GITHUB_CLIENT_SECRET=
+# Optional. Stripe TEST MODE key (sk_test_...). Empty: refunds use the fake processor.
+STRIPE_SECRET_KEY=

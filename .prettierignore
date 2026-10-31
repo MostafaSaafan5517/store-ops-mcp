@@ -3,3 +3,4 @@ dist
 coverage
 .data
 pnpm-lock.yaml
+.wrangler

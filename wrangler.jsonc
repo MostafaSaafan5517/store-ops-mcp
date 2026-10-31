@@ -1,0 +1,28 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "store-ops-mcp",
+  "main": "src/worker.ts",
+  "compatibility_date": "2026-10-01",
+  // nodejs_compat: the pg driver. global_fetch_strictly_public: required by the OAuth
+  // provider before it fetches Client ID Metadata Documents (SSRF protection).
+  "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
+  "observability": { "enabled": true },
+  "vars": {
+    // Replace with the deployed origin. Local dev uses .dev.vars instead.
+    "PUBLIC_BASE_URL": "http://localhost:8787",
+  },
+  "kv_namespaces": [
+    // Created at deploy time (after approval). Local dev uses a local simulated namespace.
+    { "binding": "OAUTH_KV", "id": "00000000000000000000000000000000" },
+  ],
+  "hyperdrive": [
+    {
+      "binding": "HYPERDRIVE",
+      // Created at deploy time (after approval), pointing at Neon.
+      "id": "00000000000000000000000000000000",
+      // Local dev: a Postgres with migrations applied, reached by a login role that is only a
+      // member of store_ops_app (Run 3b, Docker).
+      "localConnectionString": "postgres://store_ops_login:local-dev-only@localhost:5432/store_ops",
+    },
+  ],
+}
