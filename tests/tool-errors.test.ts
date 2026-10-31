@@ -13,7 +13,7 @@ describe('unexpected errors', () => {
       failing,
       { userId: USER_A, storeId: '00000000-0000-4000-8000-0000000000cc' },
       new Date(),
-      errors,
+      { errors },
     );
     try {
       const result = await mcp.call('get_stock_levels');

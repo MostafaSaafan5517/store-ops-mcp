@@ -1,8 +1,10 @@
 import type { CallToolResult, ToolAnnotations } from '@modelcontextprotocol/server';
 import { z } from 'zod';
+import type { ApprovalLinks } from '../approvals.js';
 import { withPrincipal } from '../db/principal.js';
 import type { Database, Principal, SqlClient } from '../db/types.js';
 import { ToolError } from '../errors.js';
+import type { PaymentsAdapter } from '../payments/types.js';
 
 /** Everything a tool needs. The principal comes from auth, never from tool arguments. */
 export interface ToolContext {
@@ -11,6 +13,8 @@ export interface ToolContext {
   now: () => Date;
   /** Receives unexpected errors. The client only sees a generic message. */
   onError: (error: unknown) => void;
+  payments: PaymentsAdapter;
+  approvals: ApprovalLinks;
 }
 
 export const READ_ONLY: ToolAnnotations = {

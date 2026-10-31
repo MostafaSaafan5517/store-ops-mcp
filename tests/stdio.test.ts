@@ -50,7 +50,7 @@ describe('stdio server', () => {
       expect(client.getNegotiatedProtocolVersion()).toBe('2026-07-28');
       const { tools } = await client.listTools();
       expect(tools.map((tool) => tool.name)).toContain('list_orders');
-      expect(tools).toHaveLength(6);
+      expect(tools).toHaveLength(10);
 
       const stock = await client.callTool({ name: 'get_stock_levels', arguments: { limit: 5 } });
       expect(stock.isError).toBeFalsy();

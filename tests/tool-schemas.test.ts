@@ -13,6 +13,8 @@ const READ_TOOLS = [
   'search_products',
 ];
 
+const WRITE_TOOLS = ['add_order_note', 'adjust_stock', 'cancel_order', 'issue_refund'];
+
 let local: LocalDatabase;
 let mcp: TestClient;
 let tools: Tool[];
@@ -42,8 +44,8 @@ function propertyNames(schema: unknown): string[] {
 }
 
 describe('tool definitions', () => {
-  it('lists exactly the read tools', () => {
-    expect(tools.map((tool) => tool.name).sort()).toEqual(READ_TOOLS);
+  it('lists exactly the read and write tools', () => {
+    expect(tools.map((tool) => tool.name).sort()).toEqual([...READ_TOOLS, ...WRITE_TOOLS].sort());
   });
 
   it('no tool input schema has a store id field, at any depth', () => {
@@ -71,10 +73,28 @@ describe('tool definitions', () => {
   });
 
   it('every read tool is annotated read-only and has a description and output schema', () => {
-    for (const tool of tools) {
+    for (const tool of tools.filter((item) => READ_TOOLS.includes(item.name))) {
       expect(tool.annotations?.readOnlyHint, tool.name).toBe(true);
       expect(tool.annotations?.destructiveHint, tool.name).toBe(false);
       expect(tool.description?.length ?? 0, tool.name).toBeGreaterThan(40);
+      expect(tool.outputSchema?.type, tool.name).toBe('object');
+    }
+  });
+
+  it('every write tool needs approval, is not read-only and carries the right hints', () => {
+    const destructive: Record<string, boolean> = {
+      adjust_stock: true,
+      cancel_order: true,
+      issue_refund: true,
+      add_order_note: false,
+    };
+    for (const tool of tools.filter((item) => WRITE_TOOLS.includes(item.name))) {
+      expect(tool.annotations?.readOnlyHint, tool.name).toBe(false);
+      expect(tool.annotations?.destructiveHint, tool.name).toBe(destructive[tool.name]);
+      expect(tool.annotations?.idempotentHint, tool.name).toBe(true);
+      expect(tool.annotations?.openWorldHint, tool.name).toBe(tool.name === 'issue_refund');
+      expect(tool.description, tool.name).toMatch(/approval_id/);
+      expect(propertyNames(tool.inputSchema), tool.name).toContain('approval_id');
       expect(tool.outputSchema?.type, tool.name).toBe('object');
     }
   });

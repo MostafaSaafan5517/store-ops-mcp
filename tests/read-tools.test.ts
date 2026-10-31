@@ -40,7 +40,7 @@ beforeAll(async () => {
   const storeB = await provisionDemoStore(local.app, USER_B, NOW);
   await addSampleOrder(local, storeB, 9001);
   truth = generateDemoStore({ seed: USER_A, now: NOW });
-  mcp = await connectClient(local.app, storeA, NOW, serverErrors);
+  mcp = await connectClient(local.app, storeA, NOW, { errors: serverErrors });
 });
 
 afterAll(async () => {

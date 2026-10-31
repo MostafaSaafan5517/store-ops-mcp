@@ -23,12 +23,17 @@ export async function createEmptyStore(local: LocalDatabase, userId: string): Pr
   return { userId, storeId };
 }
 
-/** Adds one customer, one product and one order (with an item) to the principal's store. */
+/**
+ * Adds one customer, one product (10 in stock) and one order of 1 unit for 1200 cents to the
+ * principal's store. Paid orders carry a demo payment reference.
+ */
 export async function addSampleOrder(
   local: LocalDatabase,
   principal: Principal,
   orderNumber = 1001,
+  status: 'pending' | 'paid' | 'fulfilled' = 'paid',
 ): Promise<{ customerId: string; productId: string; orderId: string }> {
+  const paid = status !== 'pending';
   return withPrincipal(local.app, principal, async (tx) => {
     const customer = await tx.query<{ id: string }>(
       'insert into store_ops.customers (store_id, name, email) values ($1, $2, $3) returning id',
@@ -43,9 +48,19 @@ export async function addSampleOrder(
     const productId = product.rows[0]?.id ?? '';
     const order = await tx.query<{ id: string }>(
       `insert into store_ops.orders (store_id, order_number, customer_id, status, subtotal_cents,
-         shipping_cents, tax_cents, total_cents, placed_at)
-       values ($1, $2, $3, 'paid', 1200, 0, 0, 1200, now()) returning id`,
-      [principal.storeId, orderNumber, customerId],
+         shipping_cents, tax_cents, total_cents, payment_method, payment_reference, placed_at,
+         paid_at)
+       values ($1, $2, $3, $4, 1200, 0, 0, 1200, $5, $6, now(), case when $7 then now() end)
+       returning id`,
+      [
+        principal.storeId,
+        orderNumber,
+        customerId,
+        status,
+        paid ? 'card' : null,
+        paid ? `pi_demo_${orderNumber}` : null,
+        paid,
+      ],
     );
     const orderId = order.rows[0]?.id ?? '';
     await tx.query(
