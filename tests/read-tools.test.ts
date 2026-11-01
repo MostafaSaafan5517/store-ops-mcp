@@ -1,10 +1,9 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import type { LocalDatabase } from '../src/db/pglite.js';
 import type { Principal } from '../src/db/types.js';
 import { INSTRUCTION_LIKE_NOTE } from '../src/seed/catalog.js';
 import { generateDemoStore, type DemoStoreData } from '../src/seed/demo-store.js';
 import { provisionDemoStore } from '../src/seed/provision.js';
-import { addSampleOrder, openTestDatabase, USER_A, USER_B } from './helpers.js';
+import { addSampleOrder, openTestDatabase, USER_A, USER_B, type TestDatabase } from './helpers.js';
 import { connectClient, textOf, type TestClient } from './mcp-client.js';
 
 const NOW = new Date('2026-10-31T12:00:00Z');
@@ -28,7 +27,7 @@ interface Product {
   is_low_stock: boolean;
 }
 
-let local: LocalDatabase;
+let local: TestDatabase;
 let storeA: Principal;
 let truth: DemoStoreData;
 let mcp: TestClient;

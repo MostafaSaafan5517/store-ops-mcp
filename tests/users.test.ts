@@ -1,10 +1,9 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { isUuid } from '../src/db/principal.js';
-import type { LocalDatabase } from '../src/db/pglite.js';
 import { createDemoUser, DEMO_USER_LIFETIME_MS, signInGithubUser } from '../src/users.js';
-import { openTestDatabase } from './helpers.js';
+import { openTestDatabase, type TestDatabase } from './helpers.js';
 
-let local: LocalDatabase;
+let local: TestDatabase;
 
 beforeAll(async () => {
   local = await openTestDatabase();

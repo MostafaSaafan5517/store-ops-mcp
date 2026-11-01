@@ -4,18 +4,23 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import type { LocalDatabase } from '../src/db/pglite.js';
 import { withPrincipal } from '../src/db/principal.js';
 import type { Principal } from '../src/db/types.js';
 import { createFileApprovalInbox, recordLocalDecision } from '../src/local-approvals.js';
-import { addSampleOrder, createEmptyStore, openTestDatabase, USER_A } from './helpers.js';
+import {
+  addSampleOrder,
+  createEmptyStore,
+  openTestDatabase,
+  USER_A,
+  type TestDatabase,
+} from './helpers.js';
 import { connectClient, textOf, type TestClient } from './mcp-client.js';
 
 const run = promisify(execFile);
 const APPROVAL_ID = '1f0e2d3c-4b5a-4968-8776-655443322110';
 
 const dir = mkdtempSync(join(tmpdir(), 'store-ops-approvals-'));
-let local: LocalDatabase;
+let local: TestDatabase;
 let store: Principal;
 let mcp: TestClient;
 

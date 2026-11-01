@@ -17,5 +17,13 @@
     "skipLibCheck": true,
     "noEmit": true
   },
-  "include": ["src", "tests", "scripts", ".claude/hooks", "eslint.config.ts", "vitest.config.ts"]
+  "include": [
+    "src",
+    "tests",
+    "scripts",
+    ".claude/hooks",
+    "eslint.config.ts",
+    "vitest.config.ts",
+    "vitest.pg.config.ts"
+  ]
 }

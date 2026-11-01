@@ -1,10 +1,16 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { approveAction, APPROVAL_TTL_MS, canonicalJson, hashArgs } from '../src/approvals.js';
-import type { LocalDatabase } from '../src/db/pglite.js';
 import { withPrincipal } from '../src/db/principal.js';
 import type { Principal } from '../src/db/types.js';
 import { createFakePayments, type FakePayments } from '../src/payments/fake.js';
-import { addSampleOrder, createEmptyStore, openTestDatabase, USER_A, USER_B } from './helpers.js';
+import {
+  addSampleOrder,
+  createEmptyStore,
+  openTestDatabase,
+  USER_A,
+  USER_B,
+  type TestDatabase,
+} from './helpers.js';
 import { APPROVAL_BASE_URL, connectClient, textOf, type TestClient } from './mcp-client.js';
 
 interface WriteOutput {
@@ -22,7 +28,7 @@ interface WriteOutput {
 
 const T0 = new Date('2026-10-31T12:00:00Z');
 
-let local: LocalDatabase;
+let local: TestDatabase;
 let storeA: Principal;
 let storeB: Principal;
 let current = T0;

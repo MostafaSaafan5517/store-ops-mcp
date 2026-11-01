@@ -1,17 +1,30 @@
-import { openLocalDatabase, type LocalDatabase } from '../src/db/pglite.js';
+import { openLocalDatabase } from '../src/db/pglite.js';
 import { withPrincipal, withUser } from '../src/db/principal.js';
-import type { Principal } from '../src/db/types.js';
+import type { Database, Principal } from '../src/db/types.js';
+import { openPostgresTestDatabase, type OwnerQuery } from './support/postgres.js';
 
 export const USER_A = '00000000-0000-4000-8000-00000000000a';
 export const USER_B = '00000000-0000-4000-8000-00000000000b';
 export const USER_C = '00000000-0000-4000-8000-00000000000c';
 
-export function openTestDatabase(): Promise<LocalDatabase> {
-  return openLocalDatabase();
+/** True under `pnpm test:pg` (vitest.pg.config.ts), where suites run on real Postgres. */
+export const ON_POSTGRES = process.env.STORE_OPS_TEST_DB === 'postgres';
+
+export interface TestDatabase {
+  /** Connection that bypasses RLS (PGlite's superuser, or the Postgres superuser). Checks only. */
+  owner: OwnerQuery;
+  /** The app connection: every transaction runs as `store_ops_app`, so RLS applies. */
+  app: Database;
+  close(): Promise<void>;
+}
+
+/** In-memory PGlite for `pnpm test`; a fresh database on real Postgres for `pnpm test:pg`. */
+export function openTestDatabase(): Promise<TestDatabase> {
+  return ON_POSTGRES ? openPostgresTestDatabase() : openLocalDatabase();
 }
 
 /** Creates an empty store owned by `userId` through the app role, like real provisioning. */
-export async function createEmptyStore(local: LocalDatabase, userId: string): Promise<Principal> {
+export async function createEmptyStore(local: TestDatabase, userId: string): Promise<Principal> {
   const storeId = await withUser(local.app, userId, async (tx) => {
     const { rows } = await tx.query<{ id: string }>(
       "select store_ops.create_store('Demo Store') as id",
@@ -28,7 +41,7 @@ export async function createEmptyStore(local: LocalDatabase, userId: string): Pr
  * principal's store. Paid orders carry a demo payment reference.
  */
 export async function addSampleOrder(
-  local: LocalDatabase,
+  local: TestDatabase,
   principal: Principal,
   orderNumber = 1001,
   status: 'pending' | 'paid' | 'fulfilled' = 'paid',

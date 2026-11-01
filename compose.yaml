@@ -1,0 +1,19 @@
+# Throwaway Postgres for `pnpm test:pg`. Data lives in tmpfs, so `pnpm db:down` (or a restart)
+# wipes it. Postgres 17 is one of the majors Neon supports (14 to 18).
+name: store-ops-mcp
+services:
+  postgres:
+    image: postgres:17
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: postgres
+    ports:
+      - '127.0.0.1:54329:5432'
+    tmpfs:
+      - /var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U postgres']
+      interval: 2s
+      timeout: 3s
+      retries: 30

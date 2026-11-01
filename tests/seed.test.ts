@@ -1,11 +1,10 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import type { LocalDatabase } from '../src/db/pglite.js';
 import { listStoreIdsForUser, withPrincipal, withUser } from '../src/db/principal.js';
 import { ORDER_STATUSES } from '../src/domain.js';
 import { FAKE_SURNAMES, FIRST_NAMES } from '../src/seed/catalog.js';
 import { generateDemoStore } from '../src/seed/demo-store.js';
 import { ensureDemoStore } from '../src/seed/provision.js';
-import { openTestDatabase, USER_A, USER_B, USER_C } from './helpers.js';
+import { openTestDatabase, USER_A, USER_B, USER_C, type TestDatabase } from './helpers.js';
 
 const NOW = new Date('2026-10-31T12:00:00Z');
 const DAY_MS = 86_400_000;
@@ -68,7 +67,7 @@ describe('generateDemoStore', () => {
 });
 
 describe('ensureDemoStore', () => {
-  let local: LocalDatabase;
+  let local: TestDatabase;
 
   beforeAll(async () => {
     local = await openTestDatabase();

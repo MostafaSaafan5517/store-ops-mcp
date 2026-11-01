@@ -1,8 +1,14 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import type { LocalDatabase } from '../src/db/pglite.js';
 import { listStoreIdsForUser, withPrincipal } from '../src/db/principal.js';
 import type { Principal } from '../src/db/types.js';
-import { addSampleOrder, createEmptyStore, openTestDatabase, USER_A, USER_B } from './helpers.js';
+import {
+  addSampleOrder,
+  createEmptyStore,
+  openTestDatabase,
+  USER_A,
+  USER_B,
+  type TestDatabase,
+} from './helpers.js';
 
 const STORE_TABLES = [
   'stores',
@@ -17,7 +23,7 @@ const STORE_TABLES = [
   'audit_log',
 ];
 
-let local: LocalDatabase;
+let local: TestDatabase;
 let storeA: Principal;
 let storeB: Principal;
 let orderB: { customerId: string; productId: string; orderId: string };

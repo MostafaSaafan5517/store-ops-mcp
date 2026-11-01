@@ -1,10 +1,10 @@
 import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
 import type { ExecutionContext } from '@cloudflare/workers-types';
-import { openLocalDatabase, type LocalDatabase } from '../../src/db/pglite.js';
 import { pkceChallenge } from '../../src/remote/github.js';
 import { createRemoteApp, type RemoteApp } from '../../src/remote/app.js';
 import type { RemoteEnv } from '../../src/remote/config.js';
 import { randomToken } from '../../src/remote/session.js';
+import { openTestDatabase, type TestDatabase } from '../helpers.js';
 import { MemoryKV } from './memory-kv.js';
 
 export const BASE_URL = 'https://store-ops.example.com';
@@ -26,7 +26,7 @@ export interface GithubCall {
 }
 
 export interface Harness {
-  local: LocalDatabase;
+  local: TestDatabase;
   kv: MemoryKV;
   env: RemoteEnv;
   app: RemoteApp<RemoteEnv>;
@@ -69,7 +69,7 @@ function bodyText(body: RequestInit['body']): string {
 export async function createHarness(
   options: { github?: boolean; githubUser?: { id: number; login: string } } = {},
 ): Promise<Harness> {
-  const local = await openLocalDatabase();
+  const local = await openTestDatabase();
   const kv = new MemoryKV();
   const errors: unknown[] = [];
   const githubCalls: GithubCall[] = [];

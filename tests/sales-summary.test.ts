@@ -1,11 +1,16 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import type { LocalDatabase } from '../src/db/pglite.js';
 import { withPrincipal } from '../src/db/principal.js';
 import type { Principal } from '../src/db/types.js';
 import { SALE_STATUSES } from '../src/domain.js';
 import { generateDemoStore } from '../src/seed/demo-store.js';
 import { provisionDemoStore } from '../src/seed/provision.js';
-import { createEmptyStore, openTestDatabase, USER_A, USER_B } from './helpers.js';
+import {
+  createEmptyStore,
+  openTestDatabase,
+  USER_A,
+  USER_B,
+  type TestDatabase,
+} from './helpers.js';
 import { connectClient, textOf, type TestClient } from './mcp-client.js';
 
 const NOW = new Date('2026-10-06T12:00:00Z');
@@ -69,7 +74,7 @@ const FIXTURE: FixtureOrder[] = [
   { number: 8, status: 'fulfilled', placedAt: '2026-10-07T00:00:00Z', lines: [['B-1', 1]] },
 ];
 
-async function insertFixture(local: LocalDatabase, principal: Principal): Promise<void> {
+async function insertFixture(local: TestDatabase, principal: Principal): Promise<void> {
   await withPrincipal(local.app, principal, async (tx) => {
     const customer = await tx.query<{ id: string }>(
       "insert into store_ops.customers (store_id, name, email) values ($1, 'Avery Sampleton', 'avery@example.com') returning id",
@@ -132,7 +137,7 @@ async function insertFixture(local: LocalDatabase, principal: Principal): Promis
   });
 }
 
-let local: LocalDatabase;
+let local: TestDatabase;
 let fixtureClient: TestClient;
 let seededClient: TestClient;
 

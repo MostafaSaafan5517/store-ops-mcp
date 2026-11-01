@@ -1,7 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { Tool } from '@modelcontextprotocol/client';
-import type { LocalDatabase } from '../src/db/pglite.js';
-import { createEmptyStore, openTestDatabase, USER_A } from './helpers.js';
+import { createEmptyStore, openTestDatabase, USER_A, type TestDatabase } from './helpers.js';
 import { connectClient, textOf, type TestClient } from './mcp-client.js';
 
 const READ_TOOLS = [
@@ -15,7 +14,7 @@ const READ_TOOLS = [
 
 const WRITE_TOOLS = ['add_order_note', 'adjust_stock', 'cancel_order', 'issue_refund'];
 
-let local: LocalDatabase;
+let local: TestDatabase;
 let mcp: TestClient;
 let tools: Tool[];
 
