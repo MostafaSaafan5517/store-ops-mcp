@@ -20,9 +20,9 @@
       "binding": "HYPERDRIVE",
       // Created at deploy time (after approval), pointing at Neon.
       "id": "00000000000000000000000000000000",
-      // Local dev: a Postgres with migrations applied, reached by a login role that is only a
-      // member of store_ops_app (Run 3b, Docker).
-      "localConnectionString": "postgres://store_ops_login:local-dev-only@localhost:5432/store_ops",
+      // Local dev: the compose.yaml Postgres with a store_ops_dev database (see README), reached
+      // by the login role that is only a member of store_ops_app. Throwaway credentials.
+      "localConnectionString": "postgres://store_ops_login:store_ops_login_local@localhost:54329/store_ops_dev",
     },
   ],
 }
