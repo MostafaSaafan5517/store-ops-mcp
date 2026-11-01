@@ -7,8 +7,9 @@ import { randomToken } from '../src/remote/session.js';
 //
 // Runs what a real MCP client and a person in a browser would do: the 401 challenge, discovery,
 // dynamic client registration, the authorization code flow with PKCE through "Try the demo"
-// and the consent page, a read tool, a write tool approved on the approval page, and one run
-// of the scheduled cleanup. Tokens and cookies are never printed.
+// and the consent page, a read tool, a write tool approved on the approval page, and (locally
+// only) one run of the scheduled cleanup. Also works against the deployed Worker:
+// pnpm e2e:local https://<origin>. Tokens and cookies are never printed.
 
 const BASE_URL = (process.argv[2] ?? 'http://localhost:8787').replace(/\/$/, '');
 const MCP_URL = `${BASE_URL}/mcp`;
@@ -282,7 +283,16 @@ async function main(): Promise<void> {
     },
   ]);
   steps.push(['tools', () => tools(browser, accessToken)]);
-  steps.push(['cron', scheduled]);
+  // /cdn-cgi/local/scheduled exists only in wrangler dev. A deployed Worker runs its Cron
+  // Trigger on Cloudflare's schedule, so this step is skipped for a remote base URL.
+  const local = ['localhost', '127.0.0.1', '[::1]'].includes(new URL(BASE_URL).hostname);
+  if (local) {
+    steps.push(['cron', scheduled]);
+  } else {
+    process.stdout.write(
+      "SKIP  scheduled cleanup: runs on Cloudflare's schedule for a deployed Worker\n",
+    );
+  }
   for (const [name, step] of steps) {
     try {
       await step();
