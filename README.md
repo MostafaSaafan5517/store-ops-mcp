@@ -3,27 +3,146 @@
 An MCP server for a small online store: orders, products, stock and refunds, usable from
 Claude, ChatGPT and other MCP clients.
 
-**This is a demo.** It only ever works with generated demo data labelled "Demo Store".
-All customers, products and orders are fake, and customer emails use `example.com`.
+**This is a demo.** It only ever works with generated demo data labelled "Demo Store". There is
+no real shop, brand, customer or payment behind it. Customer emails use `example.com`, and
+refunds go to a fake payment processor (or Stripe test mode, never live mode).
 
-Status: work in progress. Read tools, write tools with human approval, a local stdio server and
-a remote server for Cloudflare Workers (OAuth, GitHub and demo sign-in, consent, approval page)
-are built and tested locally, on PGlite and on real Postgres 17 in Docker. The remote server is
-not deployed yet (see "Not verified yet" below).
+What it shows: an AI assistant can read a store's data and prepare changes, but nothing changes
+until a person approves the exact action, every change is recorded in an append-only audit log,
+and each user only ever sees their own store.
 
-## Write tools need a human
+Status: Phase 1 is built and tested locally, on PGlite and on real Postgres 17. The remote
+server is not deployed yet (see [Not verified yet](#not-verified-yet)).
 
-`adjust_stock`, `cancel_order`, `issue_refund` and `add_order_note` never change anything on
-the first call. They return a plain summary of the exact effect and an `approval_id`. A person
-approves it (in chat when the client supports it, on the server's `/approve/<id>` page, or
-locally with `pnpm run approve <id>`), and
-only then does a second call with the same arguments and the `approval_id` run it, once.
-Approvals expire after 10 minutes and every executed write is recorded in an append-only
-audit log. Refunds go to a fake payment processor unless a Stripe test mode key is set.
+## Architecture
 
-## Local quick start
+```mermaid
+flowchart LR
+  subgraph Clients
+    CD[Claude Desktop / Claude Code<br/>stdio]
+    RC[Claude, ChatGPT,<br/>MCP Inspector<br/>Streamable HTTP]
+    BR[Browser<br/>sign-in, consent,<br/>approval page]
+  end
 
-Requires Node 24 and pnpm.
+  subgraph Local
+    STDIO[src/stdio.ts]
+    PGL[(PGlite<br/>.data/pglite)]
+  end
+
+  subgraph Worker[Cloudflare Worker: src/worker.ts]
+    OAUTH[OAuth provider<br/>discovery, DCR, CIMD,<br/>/authorize, /token]
+    MCP[/mcp<br/>scope check per tool/]
+    PAGES[/login, /authorize,<br/>/approve/id/]
+    CRON[Cron Trigger<br/>hourly cleanup]
+  end
+
+  SERVER[createStoreOpsServer<br/>10 tools + approval flow]
+  KV[(Workers KV<br/>OAuth grants and tokens)]
+  RL[[Rate Limiting binding]]
+  PG[(Postgres with RLS<br/>Neon via Hyperdrive)]
+
+  CD --> STDIO --> SERVER
+  SERVER --> PGL
+  RC --> OAUTH
+  RC --> MCP --> SERVER
+  BR --> PAGES
+  OAUTH --- KV
+  PAGES --- RL
+  SERVER --> PG
+  PAGES --> PG
+  CRON --> PG
+  CRON --> KV
+```
+
+Every database call runs in one transaction as the non-owner role `store_ops_app`, with the
+user and store taken from the auth context (never from tool arguments). Row level security
+does the rest.
+
+## Tools
+
+| Tool                | Kind  | Scopes needed                          | What it does                                                   |
+| ------------------- | ----- | -------------------------------------- | -------------------------------------------------------------- |
+| `list_orders`       | read  | `store:read`                           | Orders, newest first, filtered by status and date range        |
+| `search_orders`     | read  | `store:read`                           | Find orders by number, customer name or email                  |
+| `get_order`         | read  | `store:read`                           | One order with items, notes and refunds                        |
+| `search_products`   | read  | `store:read`                           | Products by name or SKU and/or category                        |
+| `get_stock_levels`  | read  | `store:read`                           | Stock on hand, low stock first                                 |
+| `get_sales_summary` | read  | `store:read`                           | Sales, refunds, net sales and top products for a period        |
+| `adjust_stock`      | write | `store:read store:write`               | Change stock on hand by a number of units, with a reason       |
+| `cancel_order`      | write | `store:read store:write`               | Cancel an unpaid (pending) order and put its stock back        |
+| `add_order_note`    | write | `store:read store:write`               | Add a staff note to an order                                   |
+| `issue_refund`      | write | `store:read store:write refunds:write` | Refund part or all of a paid order through the payment adapter |
+
+Read tools carry `readOnlyHint: true`. Write tools carry `destructiveHint` where it applies.
+Lists use opaque cursors and a `limit` of at most 50. Money is always integer cents.
+
+## The approval flow
+
+Write tools never change anything on the first call.
+
+1. The assistant calls a write tool, for example `adjust_stock` with a SKU, a quantity and a
+   reason. The server checks it against the store and stores a pending approval bound to the
+   user, the store, the tool and a SHA-256 hash of the exact arguments. It expires in 10
+   minutes.
+2. The tool returns `approval_required` with a plain summary of the exact effect and an
+   `approval_url`. Clients that support form elicitation get an in-chat confirmation instead.
+3. The person opens the link, signs in if needed, reads the summary and clicks Approve or
+   Reject. Locally, `pnpm run approve <approval_id>` does the same.
+4. The assistant calls the tool again with the same arguments and the `approval_id`. In one
+   transaction the server locks the approval, checks tool, hash, status and expiry, applies the
+   change, writes one `audit_log` row and stores the result. A repeated call returns the stored
+   result without running again.
+
+Rejected, expired, already used or mismatched approvals, or approvals of another user or
+store, change nothing and return a clear error.
+
+## Security model
+
+- **Row level security.** Every table lives in the `store_ops` schema with RLS forced. Policies
+  require both the current store and the user's membership in it, so a wrong setting returns
+  nothing instead of another tenant's rows.
+- **A limited login role.** On a real server the app logs in as a role that is only a member of
+  `store_ops_app`. It has no DELETE anywhere, cannot switch to the owner, cannot bypass RLS and
+  cannot change policies. `tests/pg/roles.test.ts` proves this on Postgres 17. Security definer
+  functions belong to `store_ops_definer` (NOLOGIN, no BYPASSRLS) with narrow policies.
+- **The store comes from auth.** No tool input contains a store id. Remote tokens carry the
+  user and store chosen at consent; stdio uses a local user id from the environment.
+- **Scopes per tool.** `store:read` is the baseline, `store:write` covers stock, cancellations
+  and notes, and `refunds:write` is needed on top for refunds. A token without them gets a 403
+  `insufficient_scope` challenge naming every scope the call needs.
+- **Audit log.** `audit_log` is append-only for everyone, including the owner: a trigger blocks
+  UPDATE, DELETE and TRUNCATE, and no role is granted more than INSERT and SELECT.
+- **Untrusted store text.** Customer names and notes are returned as data. Tool descriptions
+  and the server instructions say so, and one seeded order (#1067) carries a note written like
+  an instruction to show it.
+- **Remote pages.** Session and CSRF cookies are HMAC-signed `__Host-` cookies, every POST
+  checks a CSRF token and the Origin, every client string is escaped, and pages send a strict
+  Content Security Policy. Redirects are limited to the Claude and ChatGPT callbacks and
+  loopback addresses.
+- **Errors.** Only business errors reach the client. SQL and driver details go to the server
+  log.
+
+### Demo users
+
+- "Try the demo" creates a new demo user with a freshly generated Demo Store. It lasts 24 hours.
+- At expiry the store is hidden at once (RLS checks the expiry) and every tool call, token and
+  sign-in session stops with a "This demo expired" message.
+- An hourly Cron Trigger wipes demo stores 15 minutes or more past their expiry: everything
+  except the store row and its `audit_log` rows. It runs through `store_ops.purge_expired_demo_stores`, owned by the NOLOGIN
+  role `store_ops_janitor`, whose policies reach only expired demo stores. The same run revokes
+  those users' OAuth grants and runs one batch of the OAuth provider's `purgeExpiredData`
+  sweep. GitHub users' stores never expire.
+- "Try the demo" is limited three ways, each answered with a 429 page and `Retry-After`:
+  5 new demos per minute per client network (Cloudflare's Rate Limiting binding, approximate
+  and per location by design), 5 per client network per UTC day, and `DEMO_DAILY_CAP` per UTC
+  day in total. The daily limits are counted exactly by the database. A client network is the
+  IPv4 address or the IPv6 /64, stored only as an HMAC.
+
+## Run it locally
+
+Requires Node 24, pnpm and (for the Worker and `pnpm test:pg`) Docker.
+
+### stdio (Claude Desktop, Claude Code)
 
 ```sh
 pnpm install
@@ -35,9 +154,11 @@ Environment variables (all optional):
 
 - `STORE_OPS_USER_ID`: the local demo user id (a UUID). Defaults to a fixed demo id.
 - `STORE_OPS_DATA_DIR`: where the local PGlite database lives. Defaults to `.data/pglite`.
-- `STORE_OPS_APPROVALS_DIR`: where `pnpm run approve` leaves decisions. Defaults to `.data/approvals`.
+- `STORE_OPS_APPROVALS_DIR`: where `pnpm run approve` leaves decisions. Defaults to
+  `.data/approvals`.
 - `STORE_OPS_APPROVAL_BASE_URL`: base of approval links. Defaults to `http://localhost:8787`.
-- `STRIPE_SECRET_KEY`: Stripe test mode key (`sk_test_...`). Leave unset for the fake processor.
+- `STRIPE_SECRET_KEY`: Stripe test mode key (`sk_test_...`). Leave unset for the fake
+  processor.
 
 Approve or reject a prepared action from a second terminal while the server runs:
 
@@ -46,94 +167,108 @@ pnpm run approve <approval_id>
 pnpm run approve <approval_id> --reject
 ```
 
-## Remote server (Cloudflare Workers)
-
-`src/worker.ts` is a Worker that serves MCP over Streamable HTTP at `/mcp` and is its own OAuth
-authorization server (`@cloudflare/workers-oauth-provider`):
-
-- Discovery: `/.well-known/oauth-protected-resource/mcp` (RFC 9728, `resource` is exactly
-  `<origin>/mcp`) and `/.well-known/oauth-authorization-server` (RFC 8414).
-- Clients: Client ID Metadata Documents (preferred) and Dynamic Client Registration at
-  `/register`. Authorization code flow with PKCE S256 at `/authorize` and `/token`. Every
-  authorization response carries `iss` (RFC 9207). Refresh tokens rotate.
-- Scopes: `store:read` for read tools, `store:write` for `adjust_stock`, `cancel_order` and
-  `add_order_note`, plus `refunds:write` for `issue_refund`. A token without them gets a 403
-  `insufficient_scope` challenge that names every scope the call needs.
-- Sign-in: GitHub (a GitHub OAuth App) or "Try the demo", which creates a new demo user with its
-  own Demo Store for 24 hours. The consent page shows the app, where access is sent and the
-  scopes in plain words.
-- Allowed redirects: `https://claude.ai/api/mcp/auth_callback`,
-  `https://chatgpt.com/connector_platform_oauth_redirect` and http on `localhost` or
-  `127.0.0.1` with any port (Claude Code, MCP Inspector).
-- `/approve/<id>`: the signed-in user approves or rejects a prepared write.
-
-### Run it locally
+### The Worker (wrangler dev)
 
 ```sh
-cp .dev.vars.example .dev.vars   # then set SESSION_SECRET to 32+ random characters
-pnpm dev:worker                  # wrangler dev on http://localhost:8787
-```
-
-Use `http://localhost:8787` (not `127.0.0.1`): the OAuth metadata is built for the origin in
-`PUBLIC_BASE_URL`. Discovery, registration and the sign-in page work without a database.
-Signing in and calling tools need the Hyperdrive binding's `localConnectionString` in
-`wrangler.jsonc`: a `store_ops_dev` database in the compose Postgres. Run `pnpm test:pg` once
-first (it creates the `store_ops_owner` and `store_ops_login` roles), then:
-
-```sh
+pnpm db:up                                   # Postgres 17 in Docker on localhost:54329
+pnpm test:pg                                 # once: creates the owner and login roles
 docker compose exec postgres createdb -U postgres -O store_ops_owner store_ops_dev
+docker compose exec postgres psql -U postgres -d store_ops_dev -c "revoke temporary on database store_ops_dev from public"
 STORE_OPS_MIGRATE_URL=postgres://store_ops_owner:store_ops_owner_local@localhost:54329/store_ops_dev pnpm db:migrate
+cp .dev.vars.example .dev.vars               # then set SESSION_SECRET to 32+ random characters
+pnpm dev:worker                              # wrangler dev on http://localhost:8787
+pnpm e2e:local                               # in a second terminal
 ```
 
-`wrangler dev` against this database has not been tried yet.
+`wrangler dev` reaches the compose Postgres through the Hyperdrive binding's
+`localConnectionString` in `wrangler.jsonc`, logged in as `store_ops_login`. Use
+`http://localhost:8787` (not `127.0.0.1`): the OAuth metadata is built for `PUBLIC_BASE_URL`.
 
-Worker settings (`.dev.vars` locally, secrets and vars in Cloudflare later):
+`pnpm e2e:local` plays both the MCP client and the person in the browser: the 401 challenge,
+both discovery documents, dynamic client registration, the authorization code flow with PKCE
+through "Try the demo" and consent, `tools/list`, a read tool, a write tool that is refused
+before approval, approved on the approval page and then executed, and one run of the
+scheduled cleanup (`/cdn-cgi/local/scheduled`; `wrangler dev` does not run crons on its own).
+
+Worker settings (`.dev.vars` locally, secrets and vars in Cloudflare):
 
 - `PUBLIC_BASE_URL`: the public origin, no path. Also the OAuth issuer.
-- `SESSION_SECRET`: 32+ characters. Signs session and CSRF cookies.
+- `SESSION_SECRET`: 32+ characters. Signs session and CSRF cookies. A secret.
 - `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET`: optional. Without them only "Try the demo" shows.
-- `STRIPE_SECRET_KEY`: optional, `sk_test_...` only.
-- Bindings: `OAUTH_KV` (KV for OAuth state) and `HYPERDRIVE` (Postgres, Neon in production).
+- `STRIPE_SECRET_KEY`: optional, `sk_test_...` only. Leave unset for the demo.
+- `DEMO_DAILY_CAP`: new demo users per UTC day (`wrangler.jsonc`, default 200).
+- Bindings: `OAUTH_KV` (OAuth state), `HYPERDRIVE` (Postgres) and `DEMO_LOGIN_LIMITER` (Rate
+  Limiting). Cron: `17 * * * *`.
 
-### Tests
+Each `pnpm e2e:local` run creates a demo user, and all local runs come from one network, so
+after 5 runs in a UTC day "Try the demo" answers 429 until midnight UTC (or recreate the
+`store_ops_dev` database).
 
-`pnpm test` is the fast suite. It needs no Docker: everything runs in Node against in-memory
-PGlite, including the Worker app with small stand-ins for the Workers runtime
-(`tests/support/`): an in-memory KV, the `cloudflare:workers` module and the
-`global_fetch_strictly_public` flag. GitHub and CIMD documents are faked; tests never call
-GitHub or Stripe. `wrangler dev` was used once to check that discovery, the 401 challenge, DCR
-and the sign-in page behave the same in workerd.
+When you are done: stop `wrangler dev` and run `pnpm db:down`.
 
-`pnpm test:pg` runs the database suites again on real Postgres 17 (Docker), plus the
-Postgres-only suites in `tests/pg/`:
+## Connect a client
 
-```sh
-pnpm db:up      # Postgres 17 on localhost:54329, data in tmpfs (throwaway)
-pnpm test:pg
-pnpm db:down    # stops it and removes the container
+### Claude Desktop (local, stdio)
+
+In Claude Desktop's `claude_desktop_config.json`, with the absolute path to this folder:
+
+```json
+{
+  "mcpServers": {
+    "store-ops": {
+      "command": "pnpm",
+      "args": ["--dir", "/path/to/store-ops-mcp", "dev:stdio"]
+    }
+  }
+}
 ```
 
-If Postgres is not reachable, `pnpm test:pg` stops with a message that says so. Set
-`STORE_OPS_PG_ADMIN_URL` to use another server (a superuser URL; CI does this).
+Restart Claude Desktop. Write tools return an approval link to `http://localhost:8787`; with
+only stdio running, approve with `pnpm run approve <approval_id>` instead.
 
-How it is set up: the global setup creates two roles, `store_ops_owner` (owns the schema and
-runs the migrations; not a superuser, no BYPASSRLS) and `store_ops_login` (the app's login role,
-only a member of `store_ops_app`), migrates a template database as the owner, and each test file
-gets a fresh copy of it. The app connects through the same Hyperdrive adapter (`pg`, one
-connection per transaction) the Worker uses. What it proves:
+### Claude Code
 
-- RLS isolation, `audit_log` append-only and the approval trigger, with the limited login role.
-- The login role cannot `SET ROLE` or `SET SESSION AUTHORIZATION` to the owner, the security
-  definer role or the superuser; after `RESET ROLE` it still sees only its own store; it cannot
-  disable or bypass RLS, change policies or triggers, grant itself roles or create objects.
-- Locks under real parallel connections: two first requests for one user create exactly one
-  store, and three executions of one approval give one refund, one audit row and one processor
-  call. Removing the advisory lock or the `for update` row lock makes these tests fail.
-- Read tools, write tools with approvals, and the remote flows (OAuth, sign-in, consent,
-  approval page, `tools/call`) on Postgres.
+```sh
+claude mcp add store-ops -- pnpm --dir /path/to/store-ops-mcp dev:stdio
+```
 
-CI (`.github/workflows/ci.yml`) runs typecheck, lint, `pnpm test` and `pnpm test:pg` with a
-Postgres 17 service container.
+Or, against the local Worker: `claude mcp add --transport http store-ops http://localhost:8787/mcp`.
+Claude Code then runs the OAuth sign-in in the browser.
+
+### Claude and ChatGPT (remote)
+
+Add the deployed `https://<worker>/mcp` URL as a custom connector. The server supports Client ID
+Metadata Documents and Dynamic Client Registration, PKCE S256, `iss` in authorization
+responses, and the redirect URIs `https://claude.ai/api/mcp/auth_callback` and
+`https://chatgpt.com/connector_platform_oauth_redirect`. For ChatGPT, each tool declares
+`securitySchemes` (`oauth2` with the scopes it needs) and an expired demo returns
+`_meta["mcp/www_authenticate"]` in the tool result, as OpenAI's Apps SDK auth guide asks.
+
+### MCP Inspector
+
+```sh
+npx @modelcontextprotocol/inspector --cli pnpm dev:stdio -- -e STORE_OPS_DATA_DIR=.data/inspect --method tools/list
+```
+
+The `-e` flag goes after `--`: the Inspector does not pass your shell environment to the server.
+Against the Worker, `npx @modelcontextprotocol/inspector --cli http://localhost:8787/mcp
+--method tools/list` shows the OAuth challenge; the interactive sign-in needs a terminal (or
+use the Inspector's web UI). More in `.claude/skills/inspect/SKILL.md`.
+
+## Testing
+
+- `pnpm test`: the fast suite, no Docker. Everything runs in Node on in-memory PGlite,
+  including the Worker app with small stand-ins for the Workers runtime (`tests/support/`): an
+  in-memory KV, a fake rate limiter, the `cloudflare:workers` module and the
+  `global_fetch_strictly_public` flag. Tests never call GitHub or Stripe.
+- `pnpm test:pg`: the database suites again on real Postgres 17 (`pnpm db:up` first), logged
+  in as a role that is only a member of `store_ops_app`, plus `tests/pg/`: the login role cannot
+  escape RLS, the definer and janitor roles hold only what they need, and locks hold under
+  parallel connections.
+- `pnpm e2e:local`: the full remote flow against `wrangler dev` (see above).
+- `pnpm typecheck` and `pnpm lint` (zero warnings).
+- CI (`.github/workflows/ci.yml`) runs typecheck, lint, `pnpm test` and `pnpm test:pg` with a
+  Postgres 17 service container.
 
 ### Migrations on a real server
 
@@ -147,21 +282,25 @@ grant store_ops_app to store_ops_login;
 revoke temporary on database <db> from public;
 ```
 
-### Not verified yet
+## Not verified yet
 
-- Neon itself: migrations and tests ran on Postgres 17 in Docker, not on Neon. Neon's project
-  owner role has BYPASSRLS (per Neon's docs); the schema does not rely on it.
-- Hyperdrive itself: the adapter is tested with direct `pg` connections, not through Hyperdrive.
-- `wrangler dev` with a local Postgres, and the CI workflow (no remote repository yet).
-- A deployed Worker, and connecting from Claude and ChatGPT for real.
-- ChatGPT's requirements come from OpenAI's Apps SDK "Authenticate users" page as read on
-  2026-11-01; ChatGPT's `_meta["mcp/www_authenticate"]` tool-level signalling and tool
-  `securitySchemes` are not implemented.
-- GitHub PKCE support is sent (S256) but only checked against a fake GitHub.
+- **Neon.** Migrations and tests ran on Postgres 17 in Docker, not on Neon. Neon's project owner
+  role has BYPASSRLS (per Neon's docs); the schema does not rely on it, but the role setup has
+  not been checked there.
+- **Hyperdrive in production.** Locally `wrangler dev` connects straight to Postgres
+  (`localConnectionString` skips Hyperdrive's pooling and caching).
+- **Real Claude and ChatGPT connections.** Nothing is deployed. The OAuth and ChatGPT
+  requirements were implemented from the specs and docs and tested with local clients only.
+- **CI.** The workflow has never run: the repository has no remote yet.
+- **The rate limit in production.** It worked in `wrangler dev` (local simulation: the 6th
+  request in a minute got 429); Cloudflare documents it as approximate and per location.
+- **Cron limits.** One run does one OAuth sweep batch of 50, wipes up to 10 stores and revokes
+  up to 25 grants. Whether that stays within the Workers subrequest and KV limits of the chosen
+  plan is not measured.
+- **Parallel sign-ups.** The daily caps are counted under an advisory lock, but there is no
+  parallel-connection test for them yet (as there is for store provisioning).
+- GitHub sign-in was tested against a fake GitHub only.
 
-### Demo data lifetime
+## License
 
-Demo users stop working 24 hours after they are created (sign-in session, MCP calls and token
-refresh all stop). Their stores are not deleted yet: `audit_log` is append-only and references
-the store, so removing old demo stores needs a decided retention rule first. This and a rate
-limit on "Try the demo" are part of the deploy step.
+Not licensed for reuse. This repository is a portfolio demo.

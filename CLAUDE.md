@@ -47,8 +47,11 @@ ChatGPT and other MCP clients. Public portfolio project. Everything runs on demo
   MCP server factory
 - `src/approvals.ts`: canonical argument hashing, approval storage, `approveAction` and
   `getApproval` (the approval page in Run 3 calls these)
-- `src/tools/`: one file per tool group; `src/tools/shared.ts` holds helpers;
-  `src/tools/approval-flow.ts` runs every write tool through the approval flow
+- `src/tools/`: one file per tool group; `src/tools/shared.ts` holds helpers (`withOpenStore`
+  refuses an expired store on every tool call); `src/tools/approval-flow.ts` runs every write
+  tool through the approval flow; `src/tools/security-schemes.ts` adds ChatGPT's
+  `securitySchemes` to `tools/list` on the remote server
+- `src/maintenance.ts`: `purgeExpiredDemoStores` (calls the janitor function)
 - `src/payments/`: `PaymentsAdapter`, the fake processor, the Stripe test mode client and
   `selectPayments`
 - `src/db/`: `Database` interface, `withPrincipal`, PGlite adapter (Node only), `migrate.ts`
@@ -70,6 +73,8 @@ ChatGPT and other MCP clients. Public portfolio project. Everything runs on demo
 - `scripts/seed.ts`: `pnpm seed` creates or reports the local Demo Store
 - `scripts/approve.ts`: `pnpm run approve <approval_id> [--reject]` for local demos
 - `scripts/migrate.ts`: `pnpm db:migrate` applies migrations to `STORE_OPS_MIGRATE_URL` (owner)
+- `scripts/e2e-local.ts`: `pnpm e2e:local` drives a running `pnpm dev:worker` end to end
+- `docs/demo-script.md`: the 2 to 3 minute screen-recording script
 - `migrations/`: plain SQL, applied in file name order
 - `tests/`: Vitest suites; `tests/support/` holds the Workers stand-ins, the remote harness and
   the Postgres harness (`postgres.ts`, `pg-global-setup.ts`); `tests/pg/` holds Postgres-only
@@ -175,8 +180,36 @@ store_ops_definer; set local role store_ops_definer;` then `create or replace`, 
   it on `globalThis.Cloudflare` (`tests/support/workers-runtime.ts`).
 - Remote tests run in Node: Vitest aliases `cloudflare:workers` and inlines the provider, KV is
   `tests/support/memory-kv.ts`, and `Date` fake timers expire tokens and approvals.
-- Demo users expire after 24 hours (session, MCP endpoint and refresh check it). Their stores are
-  kept for now; cleanup conflicts with the append-only `audit_log` and is a deploy-step decision.
+- Demo users and their stores expire 24 hours after creation (decided 2026-11-01). Migration 0006
+  copies the user's expiry to `stores.expires_at`; `is_member()` is false after it, so RLS hides
+  the store at once (database clock). `withOpenStore` also refuses it by the server clock, the
+  MCP endpoint and token refresh check `demoExpiresAt` in the token props, and the sign-in page
+  says "Your demo expired" (the demo cookie is kept 7 days past expiry only for that message).
+- Cleanup: `store_ops.purge_expired_demo_stores(limit)` is owned by `store_ops_janitor` (NOLOGIN,
+  no BYPASSRLS, no access to `audit_log` or `users`); its policies reach only expired stores.
+  It deletes every row of a store 15 minutes or more past its expiry (0007) except the store row
+  (kept for the `audit_log` foreign key, `wiped_at` set) and its `audit_log` rows, locking
+  stores `for no key update skip locked`. Never give `store_ops_app` DELETE. To replace the
+  function: as for the definer, but with `store_ops_janitor` (see 0007).
+- The Worker's `scheduled` handler (cron `17 * * * *`) calls `cleanUp`: first one batch (50) of
+  the provider's `purgeExpiredData` in its own try block, with its cursor in `OAUTH_KV` under
+  `store-ops:oauth-purge-cursor` (the provider docs' pattern), then up to 10 stores and up to
+  25 revoked grants (`getOAuthApi` + `listUserGrants`/`revokeGrant`). Left-over grants are
+  harmless (tokens and refreshes of an expired demo already fail). Locally:
+  `curl "http://localhost:8787/cdn-cgi/local/scheduled"` (wrangler dev runs no crons).
+- "Try the demo" limits: the `DEMO_LOGIN_LIMITER` Rate Limiting binding (5 per 60 s per client
+  network, approximate and per Cloudflare location; Cloudflare discourages IP keys, but this
+  form has no other client identity), `DEMO_CLIENT_DAILY_LIMIT` (5) per client network per UTC
+  day and `DEMO_DAILY_CAP` in total, both counted exactly by `create_demo_user` under an
+  advisory lock (0007). A client network is the IPv4 address or the IPv6 /64
+  (`clientNetwork`), stored only as an HMAC (`users.client_hash`). `create_demo_user` refuses
+  an expiry more than 24 hours ahead. All three answer 429 with Retry-After. Test browsers in
+  the remote harness each send their own `CF-Connecting-IP`.
+- ChatGPT (OpenAI Apps SDK auth guide, read 2026-11-01): every tool lists top-level
+  `securitySchemes: [{ type: "oauth2", scopes }]`, and a closed store returns
+  `_meta["mcp/www_authenticate"]` (array of challenge strings) in the tool result. The SDK client
+  drops `securitySchemes`, so `tests/remote-demo.test.ts` checks the raw HTTP response.
+  Insufficient scope stays an HTTP 403 challenge (MCP spec).
 - `pnpm approve` is a pnpm 12 built-in, so the local approval script is `pnpm run approve`.
 
 ## Claude Code setup
@@ -211,11 +244,14 @@ scripts typed with JSDoc and checked by `tsc` and ESLint like the rest of the re
    (security definer functions failed on Postgres under FORCE RLS; now owned by
    `store_ops_definer`), `pnpm db:migrate`, CI workflow (not run yet: no remote).
    Deploy step (each item after Mostafa's yes): Cloudflare KV and Hyperdrive, Neon, GitHub OAuth
-   App, secrets, a rate limit on `/login/demo`, demo store cleanup rule, a cron for
-   `purgeExpiredData` (not written yet), then connecting from Claude and ChatGPT. On Neon:
+   App, secrets, then connecting from Claude and ChatGPT (ordered checklist in the Run 4
+   hand-back). On Neon:
    Postgres 17, run `pnpm db:migrate` as the owner, create a separate login role granted only
    `store_ops_app` for Hyperdrive (never the owner, which has BYPASSRLS on Neon), and check the
    migrations and `tests/pg/roles.test.ts` assumptions there. Also `revoke temporary on database
 <db> from public`. RLS guards against app bugs, not arbitrary SQL as the login role (it can
    set any user id it knows), so tool input must never become SQL.
-4. README (Claude Desktop, Claude Code, MCP Inspector setup), CI workflow, demo script.
+4. Run 4 (done 2026-11-01 on `feat/demo-ready`, not merged): demo expiry and janitor cleanup
+   (migrations 0006, 0007), cron with `purgeExpiredData`, rate limit and daily caps on "Try the demo",
+   ChatGPT `securitySchemes` and `_meta["mcp/www_authenticate"]`, `pnpm e2e:local` (passed
+   against wrangler dev and the compose Postgres), public README, `docs/demo-script.md`.
