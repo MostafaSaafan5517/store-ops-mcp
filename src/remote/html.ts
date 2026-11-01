@@ -14,7 +14,10 @@ export function pageHeaders(extra?: Headers): Headers {
   );
   headers.set('X-Frame-Options', 'DENY');
   headers.set('Cache-Control', 'no-store');
-  headers.set('Referrer-Policy', 'no-referrer');
+  // same-origin, not no-referrer: with no-referrer, browsers send `Origin: null` on form posts
+  // (Fetch spec, "append a request Origin header"), so the CSRF origin check refused every real
+  // sign-in, consent and approval form. Other sites still get no referrer.
+  headers.set('Referrer-Policy', 'same-origin');
   headers.set('X-Content-Type-Options', 'nosniff');
   return headers;
 }
