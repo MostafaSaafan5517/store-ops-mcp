@@ -15,7 +15,8 @@ export interface PgConnection {
  * if the login role was granted more by mistake. The login role should still be one that is
  * only a member of `store_ops_app`.
  *
- * Not yet tested against a real Postgres server (Run 3b, Docker).
+ * `pnpm test:pg` runs the tool, approval, remote and lock suites through this adapter against
+ * Postgres 17 in Docker, logged in as such a role.
  */
 export function createPostgresDatabase(connect: () => Promise<PgConnection>): Database {
   return {

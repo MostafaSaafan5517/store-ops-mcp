@@ -13,7 +13,7 @@ Create a new migration for: $ARGUMENTS
 
 - Never edit a migration that git already tracks (`git ls-files migrations/`). The guard hook
   blocks it. Every change is a new file.
-- Plain SQL, applied in file name order by `src/db/pglite.ts`. No down migrations.
+- Plain SQL, applied in file name order by `src/db/migrate.ts`. No down migrations.
 - Everything lives in the `store_ops` schema, never `public`.
 - Money columns are integer cents named `*_cents`.
 - Customer emails in any seed or test data use `example.com`.
@@ -59,7 +59,10 @@ grant select, insert on store_ops.<table> to store_ops_app;
    `and user_id = store_ops.current_user_id()` to every policy, as `approvals_*` does.
 5. New functions: `revoke all on function ... from public`, then grant execute to
    `store_ops_app` only if the app calls it. Security definer functions must
-   `set search_path = store_ops, pg_temp` and check `store_ops.current_user_id()`.
+   `set search_path = store_ops, pg_temp` and check `store_ops.current_user_id()`. Make
+   `store_ops_definer` their owner and give that role only the grants and policies they need
+   (see `0005_definer_role.sql` and the replace pattern in CLAUDE.md). PGlite runs as a
+   superuser and will not show a missing policy; `pnpm test:pg` will.
 6. Append-only tables get a trigger like `audit_log_no_update_delete` and
    `audit_log_no_truncate` in `0001_schema.sql`.
 
@@ -72,5 +75,6 @@ grant select, insert on store_ops.<table> to store_ops_app;
    its own row into store B. Use the helpers in `tests/helpers.ts` (`openTestDatabase`,
    `createEmptyStore`, `USER_A`, `USER_B`).
 3. For append-only tables, add a case that UPDATE and DELETE are rejected.
-4. Run `pnpm typecheck`, `pnpm lint` and `pnpm test`. All must pass.
+4. Run `pnpm typecheck`, `pnpm lint`, `pnpm test` and `pnpm test:pg` (after `pnpm db:up`).
+   All must pass.
 5. Suggest running the `store-ops-security-reviewer` subagent before committing.

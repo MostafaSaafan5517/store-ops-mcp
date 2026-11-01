@@ -10,7 +10,8 @@ ChatGPT and other MCP clients. Public portfolio project. Everything runs on demo
 - MCP spec 2026-07-28 (stateless core); 2025-era clients are served by the SDK's legacy mode
 - zod v4 for tool input and output schemas
 - Postgres with RLS. Production: Neon through Cloudflare Hyperdrive. PGlite for fast tests and
-  local dev; real Postgres in Docker for security and integration tests (Run 3)
+  local dev; Postgres 17 in Docker (`compose.yaml`, port 54329) for `pnpm test:pg`. 17 is one of
+  the majors Neon supports (14 to 18); pin the same major when creating the Neon project
 - Vitest, ESLint (zero warnings), Prettier
 - Cloudflare Workers (Streamable HTTP via `createMcpHandler`) and OAuth via
   `@cloudflare/workers-oauth-provider` 1.2.4; `wrangler` is a dev dependency (never global)
@@ -50,8 +51,9 @@ ChatGPT and other MCP clients. Public portfolio project. Everything runs on demo
   `src/tools/approval-flow.ts` runs every write tool through the approval flow
 - `src/payments/`: `PaymentsAdapter`, the fake processor, the Stripe test mode client and
   `selectPayments`
-- `src/db/`: `Database` interface, `withPrincipal`, PGlite adapter (Node only), migrations runner,
-  `postgres.ts` (pg through Hyperdrive, one connection per transaction, `SET LOCAL ROLE`)
+- `src/db/`: `Database` interface, `withPrincipal`, PGlite adapter (Node only), `migrate.ts`
+  (migrations runner for PGlite and pg, Node only), `postgres.ts` (pg through Hyperdrive, one
+  connection per transaction, `SET LOCAL ROLE`)
 - `src/users.ts`: GitHub and demo users mapped to internal UUIDs (security definer functions)
 - `src/seed/`: deterministic demo store generator (`generateDemoStore`) and provisioning
   (`ensureDemoStore` gives each user their own Demo Store)
@@ -67,14 +69,19 @@ ChatGPT and other MCP clients. Public portfolio project. Everything runs on demo
   - `session.ts`: HMAC-signed `__Host-` session cookie and CSRF; `github.ts`; `redirects.ts`
 - `scripts/seed.ts`: `pnpm seed` creates or reports the local Demo Store
 - `scripts/approve.ts`: `pnpm run approve <approval_id> [--reject]` for local demos
+- `scripts/migrate.ts`: `pnpm db:migrate` applies migrations to `STORE_OPS_MIGRATE_URL` (owner)
 - `migrations/`: plain SQL, applied in file name order
-- `tests/`: Vitest suites; `tests/support/` holds the Workers stand-ins and the remote harness
+- `tests/`: Vitest suites; `tests/support/` holds the Workers stand-ins, the remote harness and
+  the Postgres harness (`postgres.ts`, `pg-global-setup.ts`); `tests/pg/` holds Postgres-only
+  suites (roles, locks, driver types)
+- `vitest.config.ts` (`pnpm test`, PGlite, excludes `tests/pg`) and `vitest.pg.config.ts`
+  (`pnpm test:pg`); `.github/workflows/ci.yml` runs both with a Postgres service
 
 ## Conventions
 
 - Keep everything under `src/` runtime-agnostic (web-standard APIs only). Node imports are
-  allowed only in `src/stdio.ts`, `src/db/pglite.ts` and `src/local-approvals.ts` (ESLint
-  enforces this).
+  allowed only in `src/stdio.ts`, `src/db/pglite.ts`, `src/db/migrate.ts` and
+  `src/local-approvals.ts` (ESLint enforces this).
 - All data access goes through `withPrincipal(db, principal, fn)`, which runs one transaction
   with `store_ops.user_id` and `store_ops.store_id` set via `set_config(..., true)` as the
   non-owner role `store_ops_app`. Never query store tables outside it.
@@ -139,10 +146,23 @@ ChatGPT and other MCP clients. Public portfolio project. Everything runs on demo
   probe. That sibling runs our startup (and may seed the store) before the real session starts.
 - PGlite has a single superuser session, so the app role is applied with `SET LOCAL ROLE`, and
   SQL inside a transaction could `RESET ROLE`. Never run SQL from tool input. On real Postgres
-  the app must log in as a role that is only a member of `store_ops_app`.
-- PGlite also runs transactions one at a time, so concurrency tests there (two first
-  requests, two executions of one approval) prove the outcome but not the locks. The Run 3
-  Docker Postgres harness must run them with real parallel connections.
+  the app logs in as a role that is only a member of `store_ops_app` (`store_ops_login` in
+  tests), so `RESET ROLE` gains nothing; `tests/pg/roles.test.ts` proves it.
+- PGlite also runs transactions one at a time, so concurrency tests there prove the outcome but
+  not the locks. `tests/pg/locks.test.ts` proves the locks with parallel connections (verified
+  2026-11-01: removing the advisory lock or `for update` makes it fail).
+- PGlite hides RLS problems because its only user is a superuser. Security definer functions
+  are owned by `store_ops_definer` (NOLOGIN, no BYPASSRLS, owns no table), which has its own
+  narrow policies (`0005_definer_role.sql`). New security definer functions go to that owner
+  with the policies they need. To replace one later: `grant create on schema store_ops to
+store_ops_definer; set local role store_ops_definer;` then `create or replace`, then
+  `reset role; revoke create on schema store_ops from store_ops_definer;` (checked on 17).
+- Test databases: `pnpm test` uses PGlite and needs no Docker. `pnpm test:pg` needs
+  `pnpm db:up`; it fails with a clear message when Postgres is unreachable. Suites pick the
+  database through `openTestDatabase()` (`tests/helpers.ts`); `local.owner` is a superuser
+  connection that bypasses RLS, for checks only.
+- `pg` returns bigint and numeric as strings: aggregates go through `toInt`, timestamps through
+  `toIso` (`tests/pg/types.test.ts`). Cast counts with `::int` in SQL or use `toInt`.
 
 ## Remote server notes
 
@@ -185,12 +205,17 @@ scripts typed with JSDoc and checked by `tsc` and ESLint like the rest of the re
 3. Run 3a (done 2026-11-01 on `feat/remote-server`, not merged): Streamable HTTP on a Worker,
    OAuth provider, GitHub login and demo login, consent, protected resource metadata, 401/403
    behaviour, audience checks, approval page, tests (Node plus PGlite).
-   Run 3b (needs Docker): real Postgres harness (login role that is only a member of
-   `store_ops_app`), RLS and remote tests on Postgres, the Hyperdrive adapter on Postgres,
-   lock proofs with parallel connections, migrations 0002 to 0004 on Postgres (check that the
-   security definer functions work when the owner does not bypass RLS, since every table uses
-   FORCE ROW LEVEL SECURITY).
+   Run 3b (done 2026-11-01 on `test/real-postgres`, not merged): Postgres 17 harness with a
+   limited login role, all database suites and the remote flows on Postgres through the
+   Hyperdrive adapter, role escape tests, lock proofs with parallel connections, migration 0005
+   (security definer functions failed on Postgres under FORCE RLS; now owned by
+   `store_ops_definer`), `pnpm db:migrate`, CI workflow (not run yet: no remote).
    Deploy step (each item after Mostafa's yes): Cloudflare KV and Hyperdrive, Neon, GitHub OAuth
    App, secrets, a rate limit on `/login/demo`, demo store cleanup rule, a cron for
-   `purgeExpiredData`, then connecting from Claude and ChatGPT.
+   `purgeExpiredData` (not written yet), then connecting from Claude and ChatGPT. On Neon:
+   Postgres 17, run `pnpm db:migrate` as the owner, create a separate login role granted only
+   `store_ops_app` for Hyperdrive (never the owner, which has BYPASSRLS on Neon), and check the
+   migrations and `tests/pg/roles.test.ts` assumptions there. Also `revoke temporary on database
+<db> from public`. RLS guards against app bugs, not arbitrary SQL as the login role (it can
+   set any user id it knows), so tool input must never become SQL.
 4. README (Claude Desktop, Claude Code, MCP Inspector setup), CI workflow, demo script.
