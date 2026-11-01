@@ -139,14 +139,27 @@ export async function createHarness(
   };
 }
 
-/** A browser: keeps cookies per name, never follows redirects. */
+let nextAddress = 1;
+
+/** A distinct documentation address (198.18.0.0/15) for each test browser. */
+function testAddress(): string {
+  const n = nextAddress++;
+  return `198.18.${Math.floor(n / 256) % 256}.${n % 256}`;
+}
+
+/**
+ * A browser: keeps cookies per name, never follows redirects, and sends its own
+ * CF-Connecting-IP like Cloudflare does, so per-client limits see one client per browser.
+ */
 export class Browser {
   readonly cookies = new Map<string, string>();
+  readonly address = testAddress();
 
   constructor(private readonly harness: Harness) {}
 
   async fetch(url: string, init: RequestInit = {}): Promise<Response> {
     const headers = new Headers(init.headers);
+    if (!headers.has('cf-connecting-ip')) headers.set('CF-Connecting-IP', this.address);
     if (this.cookies.size > 0) {
       headers.set(
         'Cookie',

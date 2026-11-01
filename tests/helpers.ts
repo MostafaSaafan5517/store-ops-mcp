@@ -1,6 +1,7 @@
 import { openLocalDatabase } from '../src/db/pglite.js';
 import { withPrincipal, withUser } from '../src/db/principal.js';
 import type { Database, Principal } from '../src/db/types.js';
+import { createDemoUser } from '../src/users.js';
 import { openPostgresTestDatabase, type OwnerQuery } from './support/postgres.js';
 
 export const USER_A = '00000000-0000-4000-8000-00000000000a';
@@ -84,4 +85,18 @@ export async function addSampleOrder(
     );
     return { customerId, productId, orderId };
   });
+}
+
+/** A new demo user with its own client hash and caps high enough never to apply. */
+export async function newDemoUser(
+  db: Database,
+  now = new Date(),
+): Promise<{ userId: string; expiresAt: Date }> {
+  const demo = await createDemoUser(db, now, {
+    dailyCap: 100_000,
+    clientDailyCap: 100_000,
+    clientHash: `test-client-${crypto.randomUUID()}`,
+  });
+  if ('refused' in demo) throw new Error(`demo user refused: ${demo.refused}`);
+  return demo;
 }

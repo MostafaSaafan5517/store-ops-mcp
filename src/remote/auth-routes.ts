@@ -219,13 +219,39 @@ function tooManyRequests(message: string, retryAfterSeconds: number): Response {
 /** Seconds a client waits after hitting the per-client limit (the binding's period). */
 export const DEMO_LOGIN_RETRY_SECONDS = 60;
 
+/** New demos per client network per UTC day, so one client cannot use up the global cap. */
+export const DEMO_CLIENT_DAILY_LIMIT = 5;
+
+/**
+ * The client's network as the rate limit key: the IPv4 address, or the /64 prefix of an IPv6
+ * address (one subscriber usually holds a whole /64). Cloudflare sets CF-Connecting-IP on
+ * every request from the internet.
+ */
+export function clientNetwork(request: Request): string | undefined {
+  const address = request.headers.get('cf-connecting-ip')?.trim().toLowerCase();
+  if (!address) return undefined;
+  if (!address.includes(':')) return address;
+  const [head = '', tail = ''] = address.split('::');
+  const left = head ? head.split(':') : [];
+  const right = tail ? tail.split(':') : [];
+  const groups = address.includes('::')
+    ? [...left, ...Array<string>(Math.max(0, 8 - left.length - right.length)).fill('0'), ...right]
+    : left;
+  return `${groups
+    .slice(0, 4)
+    .map((group) => group.replace(/^0+(?=.)/, ''))
+    .join(':')}::/64`;
+}
+
 /**
  * "Try the demo": a new demo user with a freshly generated Demo Store. Limited per client
- * address by the Rate Limiting binding (approximate, per Cloudflare location) and, exactly,
- * by a global daily cap that the database counts.
+ * network by the Rate Limiting binding (approximate, per Cloudflare location), per client
+ * network per UTC day and by a global daily cap (both counted exactly by the database).
  */
 export async function demoLogin(context: PageContext): Promise<Response> {
-  const client = context.request.headers.get('cf-connecting-ip') ?? 'unknown';
+  const network = clientNetwork(context.request);
+  if (!network) context.onError(new Error('demo sign-in without CF-Connecting-IP'));
+  const client = network ?? 'unknown';
   const { success } = await context.env.DEMO_LOGIN_LIMITER.limit({ key: `demo-login:${client}` });
   if (!success) {
     return tooManyRequests(
@@ -235,11 +261,17 @@ export async function demoLogin(context: PageContext): Promise<Response> {
   }
   const checked = await checkedLoginForm(context);
   if ('refused' in checked) return checked.refused;
-  const demo = await createDemoUser(context.db, context.now, context.config.demoDailyCap);
-  if (!demo) {
+  const demo = await createDemoUser(context.db, context.now, {
+    dailyCap: context.config.demoDailyCap,
+    clientDailyCap: DEMO_CLIENT_DAILY_LIMIT,
+    clientHash: await context.config.signer.sign('demo-client', client),
+  });
+  if ('refused' in demo) {
+    const github = context.config.github ? ', or sign in with GitHub.' : '.';
     return tooManyRequests(
-      "Today's limit of new demos is reached. Please try again after midnight UTC" +
-        (context.config.github ? ', or sign in with GitHub.' : '.'),
+      demo.refused === 'client_cap'
+        ? `This network started ${DEMO_CLIENT_DAILY_LIMIT} demos today, the most allowed. Please try again after midnight UTC${github}`
+        : `Today's limit of new demos is reached. Please try again after midnight UTC${github}`,
       secondsUntilUtcMidnight(context.now),
     );
   }

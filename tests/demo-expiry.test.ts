@@ -5,7 +5,7 @@ import type { Principal } from '../src/db/types.js';
 import { purgeExpiredDemoStores } from '../src/maintenance.js';
 import { ensureDemoStore } from '../src/seed/provision.js';
 import { createDemoUser, DEMO_USER_LIFETIME_MS, signInGithubUser } from '../src/users.js';
-import { openTestDatabase, type TestDatabase } from './helpers.js';
+import { newDemoUser, openTestDatabase, type TestDatabase } from './helpers.js';
 import { connectClient, textOf } from './mcp-client.js';
 
 const EXPIRED_MESSAGE = /This demo expired/;
@@ -33,21 +33,23 @@ afterAll(async () => {
 });
 
 async function demoStore(now = new Date()): Promise<Principal & { expiresAt: Date }> {
-  const demo = await createDemoUser(local.app, now, 1000);
-  if (!demo) throw new Error('demo user not created');
+  const demo = await newDemoUser(local.app, now);
   const { principal } = await ensureDemoStore(local.app, demo.userId, now);
   return { ...principal, expiresAt: demo.expiresAt };
 }
 
-/** Moves a store's expiry (and its user's) into the past, as the database clock sees it. */
-async function expire(principal: Principal): Promise<void> {
+/**
+ * Moves a store's expiry (and its user's) into the past, as the database clock sees it.
+ * The cleanup waits 15 minutes after the expiry, so `ago` defaults past that.
+ */
+async function expire(principal: Principal, ago = '1 hour'): Promise<void> {
   await local.owner.query(
-    "update store_ops.stores set expires_at = now() - interval '1 minute' where id = $1",
-    [principal.storeId],
+    'update store_ops.stores set expires_at = now() - $2::interval where id = $1',
+    [principal.storeId, ago],
   );
   await local.owner.query(
-    "update store_ops.users set expires_at = now() - interval '1 minute' where id = $1",
-    [principal.userId],
+    'update store_ops.users set expires_at = now() - $2::interval where id = $1',
+    [principal.userId, ago],
   );
 }
 
@@ -194,6 +196,18 @@ describe('cleanup of expired demo stores', () => {
     expect(again.map((row) => row.storeId)).not.toContain(expired.storeId);
   });
 
+  it('waits 15 minutes after the expiry before wiping, while the store is already hidden', async () => {
+    const recent = await demoStore();
+    await expire(recent, '5 minutes');
+    const purged = await purgeExpiredDemoStores(local.app);
+    expect(purged.map((store) => store.storeId)).not.toContain(recent.storeId);
+    expect(await ownerCount('orders', recent.storeId)).toBeGreaterThan(0);
+    const { rows } = await withPrincipal(local.app, recent, (tx) =>
+      tx.query<{ n: number }>('select count(*)::int as n from store_ops.orders'),
+    );
+    expect(rows[0]?.n).toBe(0);
+  });
+
   it('keeps the app role without DELETE and audit_log append-only', async () => {
     const demo = await demoStore();
     await addAuditRow(demo);
@@ -215,22 +229,65 @@ describe('cleanup of expired demo stores', () => {
   });
 });
 
-describe('daily cap on new demo users', () => {
-  it('stops creating demo users once the cap for today is reached', async () => {
+describe('daily caps on new demo users', () => {
+  const caps = (clientHash: string, dailyCap: number, clientDailyCap: number) => ({
+    dailyCap,
+    clientDailyCap,
+    clientHash,
+  });
+
+  async function demoUsersToday(): Promise<number> {
     const { rows } = await local.owner.query<{ n: number }>(
       `select count(*)::int as n from store_ops.users
        where kind = 'demo' and created_at >= date_trunc('day', now() at time zone 'utc') at time zone 'utc'`,
     );
-    const today = rows[0]?.n ?? 0;
+    return rows[0]?.n ?? 0;
+  }
+
+  it('stops creating demo users once the global cap for today is reached', async () => {
+    const today = await demoUsersToday();
     const now = new Date();
-    expect(await createDemoUser(local.app, now, today + 1)).toBeDefined();
-    expect(await createDemoUser(local.app, now, today + 1)).toBeUndefined();
-    expect(await createDemoUser(local.app, now, 0)).toBeUndefined();
-    const demo = await createDemoUser(local.app, now, today + 2);
-    expect(demo?.expiresAt.getTime()).toBe(now.getTime() + DEMO_USER_LIFETIME_MS);
+    const first = await createDemoUser(
+      local.app,
+      now,
+      caps('cap-client-a-0123456789', today + 1, 9),
+    );
+    expect('userId' in first).toBe(true);
+    expect(
+      await createDemoUser(local.app, now, caps('cap-client-b-0123456789', today + 1, 9)),
+    ).toEqual({
+      refused: 'daily_cap',
+    });
+    const more = await createDemoUser(
+      local.app,
+      now,
+      caps('cap-client-c-0123456789', today + 2, 9),
+    );
+    if ('refused' in more) throw new Error('refused');
+    expect(more.expiresAt.getTime()).toBe(now.getTime() + DEMO_USER_LIFETIME_MS);
   });
 
-  it('refuses a negative cap', async () => {
-    await expect(createDemoUser(local.app, new Date(), -1)).rejects.toThrow(/dailyCap/);
+  it('limits each client network per day, separately from other clients', async () => {
+    const now = new Date();
+    const one = caps('per-client-one-0123456789', 100_000, 2);
+    expect('userId' in (await createDemoUser(local.app, now, one))).toBe(true);
+    expect('userId' in (await createDemoUser(local.app, now, one))).toBe(true);
+    expect(await createDemoUser(local.app, now, one)).toEqual({ refused: 'client_cap' });
+    const other = caps('per-client-two-0123456789', 100_000, 2);
+    expect('userId' in (await createDemoUser(local.app, now, other))).toBe(true);
+  });
+
+  it('refuses negative caps, a missing client and an expiry beyond 24 hours', async () => {
+    const now = new Date();
+    await expect(
+      createDemoUser(local.app, now, caps('valid-client-0123456789', -1, 1)),
+    ).rejects.toThrow(/demo caps/);
+    await expect(createDemoUser(local.app, now, caps('short', 10, 10))).rejects.toThrow(
+      /p_client_hash/,
+    );
+    const later = new Date(now.getTime() + 2 * DEMO_USER_LIFETIME_MS);
+    await expect(
+      createDemoUser(local.app, later, caps('valid-client-0123456789', 10, 10)),
+    ).rejects.toThrow(/within 24 hours/);
   });
 });

@@ -37,11 +37,21 @@ export interface RemoteApp<Env extends RemoteEnv> {
 export interface CleanupReport {
   storesWiped: number;
   grantsRevoked: number;
-  oauthPurge: { grantsPurged: number; tokensPurged: number; done: boolean };
+  /** Users of wiped stores whose grants were not revoked (budget reached or a KV error). */
+  usersNotRevoked: number;
+  /** Null when the provider's sweep failed (reported to onError). */
+  oauthPurge: { grantsPurged: number; tokensPurged: number; done: boolean } | null;
 }
 
-/** Demo stores wiped per cron run. Each one also costs a few KV calls to revoke grants. */
-export const CRON_STORE_BATCH = 20;
+/**
+ * Per cron run, to stay well inside the Workers limits on subrequests and KV operations per
+ * invocation: one OAuth sweep batch, up to 10 wiped stores and up to 25 revoked grants (each
+ * revocation takes a few KV calls). Grants left over are harmless: their tokens and refreshes
+ * already fail for an expired demo, and the provider's sweep removes them once expired.
+ */
+export const OAUTH_PURGE_BATCH = 50;
+export const CRON_STORE_BATCH = 10;
+export const CRON_GRANT_BUDGET = 25;
 /** KV key holding where the OAuth provider's purge sweep stopped (its documented pattern). */
 export const OAUTH_PURGE_CURSOR_KEY = 'store-ops:oauth-purge-cursor';
 
@@ -173,53 +183,72 @@ export function createRemoteApp<Env extends RemoteEnv>(deps: RemoteDeps<Env>): R
     return created;
   }
 
-  /** Revokes every OAuth grant of a user. Their tokens already fail; this frees KV. */
-  async function revokeAllGrants(oauth: OAuthHelpers, userId: string): Promise<number> {
-    let revoked = 0;
-    let cursor: string | undefined;
-    do {
-      const page = await oauth.listUserGrants(userId, cursor ? { cursor } : {});
-      for (const grant of page.items) {
-        await oauth.revokeGrant(grant.id, userId);
-        revoked += 1;
-      }
-      cursor = page.cursor;
-    } while (cursor);
-    return revoked;
+  /** Revokes a user's OAuth grants, at most `budget`. Returns how many, and if all are gone. */
+  async function revokeGrants(
+    oauth: OAuthHelpers,
+    userId: string,
+    budget: number,
+  ): Promise<{ revoked: number; complete: boolean }> {
+    const page = await oauth.listUserGrants(userId, { limit: budget + 1 });
+    const grants = page.items.slice(0, budget);
+    for (const grant of grants) await oauth.revokeGrant(grant.id, userId);
+    return {
+      revoked: grants.length,
+      complete: page.items.length <= budget && page.cursor === undefined,
+    };
   }
 
-  /**
-   * Wipes expired demo stores (audit_log stays), revokes their users' grants, then runs one
-   * batch of the OAuth provider's own `purgeExpiredData` sweep, resuming from its cursor.
-   */
-  async function cleanUp(env: Env): Promise<CleanupReport> {
-    const { provider, options } = setup(env);
-    const purged = await purgeExpiredDemoStores(deps.database(env), CRON_STORE_BATCH);
-    const oauth = getOAuthApi(options, env);
-    let grantsRevoked = 0;
-    for (const store of purged) {
-      for (const userId of store.userIds) {
-        try {
-          grantsRevoked += await revokeAllGrants(oauth, userId);
-        } catch (error) {
-          // The store is already wiped and the tokens fail; report and go on.
-          onError(error);
-        }
-      }
-    }
+  /** One batch of the provider's own sweep, resuming from its cursor in KV. */
+  async function sweepOAuth(env: Env, provider: OAuthProvider<Env>) {
     const cursor = (await env.OAUTH_KV.get(OAUTH_PURGE_CURSOR_KEY)) ?? undefined;
-    const result = await provider.purgeExpiredData(env, cursor ? { cursor } : {});
+    const result = await provider.purgeExpiredData(env, {
+      batchSize: OAUTH_PURGE_BATCH,
+      ...(cursor ? { cursor } : {}),
+    });
     if (result.cursor) await env.OAUTH_KV.put(OAUTH_PURGE_CURSOR_KEY, result.cursor);
     else await env.OAUTH_KV.delete(OAUTH_PURGE_CURSOR_KEY);
     return {
-      storesWiped: purged.length,
-      grantsRevoked,
-      oauthPurge: {
-        grantsPurged: result.grantsPurged,
-        tokensPurged: result.tokensPurged,
-        done: result.done,
-      },
+      grantsPurged: result.grantsPurged,
+      tokensPurged: result.tokensPurged,
+      done: result.done,
     };
+  }
+
+  /**
+   * One batch of the provider's `purgeExpiredData` sweep (first, so it never waits on the
+   * rest), then wipes expired demo stores (audit_log stays) and revokes their users' grants
+   * within a fixed budget.
+   */
+  async function cleanUp(env: Env): Promise<CleanupReport> {
+    const { provider, options } = setup(env);
+    let oauthPurge: CleanupReport['oauthPurge'] = null;
+    try {
+      oauthPurge = await sweepOAuth(env, provider);
+    } catch (error) {
+      onError(error);
+    }
+    const purged = await purgeExpiredDemoStores(deps.database(env), CRON_STORE_BATCH);
+    const oauth = getOAuthApi(options, env);
+    const userIds = purged.flatMap((store) => store.userIds);
+    let grantsRevoked = 0;
+    let usersNotRevoked = 0;
+    for (const userId of userIds) {
+      const budget = CRON_GRANT_BUDGET - grantsRevoked;
+      if (budget <= 0) {
+        usersNotRevoked += 1;
+        continue;
+      }
+      try {
+        const result = await revokeGrants(oauth, userId, budget);
+        grantsRevoked += result.revoked;
+        if (!result.complete) usersNotRevoked += 1;
+      } catch (error) {
+        // The store is already wiped and the tokens fail; report and go on.
+        onError(error);
+        usersNotRevoked += 1;
+      }
+    }
+    return { storesWiped: purged.length, grantsRevoked, usersNotRevoked, oauthPurge };
   }
 
   return {

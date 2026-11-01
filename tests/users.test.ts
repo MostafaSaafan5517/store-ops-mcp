@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { isUuid } from '../src/db/principal.js';
-import { createDemoUser, DEMO_USER_LIFETIME_MS, signInGithubUser } from '../src/users.js';
-import { openTestDatabase, type TestDatabase } from './helpers.js';
+import { DEMO_USER_LIFETIME_MS, signInGithubUser } from '../src/users.js';
+import { newDemoUser, openTestDatabase, type TestDatabase } from './helpers.js';
 
 let local: TestDatabase;
 
@@ -30,9 +30,8 @@ describe('users', () => {
 
   it('creates a new demo user with an expiry each time', async () => {
     const now = new Date('2026-10-31T12:00:00.000Z');
-    const a = await createDemoUser(local.app, now, 100);
-    const b = await createDemoUser(local.app, now, 100);
-    if (!a || !b) throw new Error('demo users were not created');
+    const a = await newDemoUser(local.app, now);
+    const b = await newDemoUser(local.app, now);
     expect(a.userId).not.toBe(b.userId);
     expect(a.expiresAt.getTime()).toBe(now.getTime() + DEMO_USER_LIFETIME_MS);
     const { rows } = await local.owner.query<{ kind: string; expires_at: Date }>(

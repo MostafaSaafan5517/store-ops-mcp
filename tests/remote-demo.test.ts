@@ -1,6 +1,7 @@
 import type { ExecutionContext, ScheduledController } from '@cloudflare/workers-types';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { OAUTH_PURGE_CURSOR_KEY } from '../src/remote/app.js';
+import { clientNetwork, DEMO_CLIENT_DAILY_LIMIT } from '../src/remote/auth-routes.js';
 import { scopesForTool } from '../src/remote/scopes.js';
 import {
   authorizeUrl,
@@ -111,6 +112,56 @@ describe('rate limits on "Try the demo"', () => {
     } finally {
       await capped.close();
     }
+  });
+});
+
+describe('per-client daily limit on "Try the demo"', () => {
+  it('groups IPv6 clients by their /64 and keeps IPv4 addresses whole', () => {
+    const network = (address?: string) =>
+      clientNetwork(
+        new Request(BASE_URL, address ? { headers: { 'CF-Connecting-IP': address } } : {}),
+      );
+    expect(network('203.0.113.7')).toBe('203.0.113.7');
+    expect(network('2001:db8:abcd:12:1::5')).toBe('2001:db8:abcd:12::/64');
+    expect(network('2001:0db8:abcd:0012:ffff:1:2:3')).toBe('2001:db8:abcd:12::/64');
+    expect(network('2001:db8::1')).toBe('2001:db8:0:0::/64');
+    expect(network('::1')).toBe('0:0:0:0::/64');
+    expect(network()).toBeUndefined();
+  });
+
+  it('answers 429 once one network started the daily number of demos', async () => {
+    const address = '2001:db8:77:1::1';
+    for (let i = 0; i < DEMO_CLIENT_DAILY_LIMIT; i += 1) {
+      const browser = new Browser(harness);
+      const html = await signInPage(harness, browser);
+      // Other addresses in the same /64 count as the same client.
+      const ok = await postDemoLogin(browser, html, {
+        'CF-Connecting-IP': `2001:db8:77:1::${i + 2}`,
+      });
+      expect(ok.status).toBe(303);
+    }
+    const browser = new Browser(harness);
+    const html = await signInPage(harness, browser);
+    const before = await demoUserCount(harness);
+    const refused = await postDemoLogin(browser, html, { 'CF-Connecting-IP': address });
+    expect(refused.status).toBe(429);
+    expect(await refused.text()).toContain(
+      `This network started ${DEMO_CLIENT_DAILY_LIMIT} demos today`,
+    );
+    expect(Number(refused.headers.get('retry-after'))).toBeGreaterThan(0);
+    expect(await demoUserCount(harness)).toBe(before);
+  });
+
+  it('reports a sign-up without a client address', async () => {
+    const errors = harness.errors.length;
+    const response = await harness.fetch(`${BASE_URL}/login/demo`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded', Origin: BASE_URL },
+      body: 'csrf=x&return_to=/authorize',
+    });
+    expect(response.status).toBe(403);
+    expect(String(harness.errors.at(-1))).toContain('CF-Connecting-IP');
+    harness.errors.splice(errors);
   });
 });
 
@@ -231,15 +282,17 @@ describe('scheduled cleanup', () => {
     const oauth = harness.env.OAUTH_PROVIDER;
     if (!oauth) throw new Error('OAUTH_PROVIDER is missing');
     expect((await oauth.listUserGrants(userId)).items).toHaveLength(1);
+    // Past the cleanup's 15 minute grace.
     await harness.local.owner.query(
-      "update store_ops.stores set expires_at = now() - interval '1 minute' where id = $1",
+      "update store_ops.stores set expires_at = now() - interval '1 hour' where id = $1",
       [storeId],
     );
 
     const report = await harness.app.cleanUp(harness.env);
     expect(report.storesWiped).toBeGreaterThanOrEqual(1);
     expect(report.grantsRevoked).toBeGreaterThanOrEqual(1);
-    expect(report.oauthPurge.done).toBe(true);
+    expect(report.oauthPurge?.done).toBe(true);
+    expect(report.usersNotRevoked).toBe(0);
     expect((await oauth.listUserGrants(userId)).items).toEqual([]);
     expect(await harness.kv.get(OAUTH_PURGE_CURSOR_KEY)).toBeNull();
     const members = await harness.local.owner.query(
@@ -254,6 +307,37 @@ describe('scheduled cleanup', () => {
       client_id: request.clientId,
     });
     expect(refresh.status).toBe(400);
+  });
+
+  it('still wipes expired stores when the OAuth sweep fails', async () => {
+    const { tokens } = await connectDemoUser(harness, 'store:read');
+    const { storeId } = await tokenProps(tokens.access_token);
+    await harness.local.owner.query(
+      "update store_ops.stores set expires_at = now() - interval '1 hour' where id = $1",
+      [storeId],
+    );
+    const get = harness.kv.get.bind(harness.kv);
+    const failure = new Error('KV unavailable');
+    const spy = vi
+      .spyOn(harness.kv, 'get')
+      .mockImplementation((key, ...rest) =>
+        key === OAUTH_PURGE_CURSOR_KEY ? Promise.reject(failure) : get(key, ...rest),
+      );
+    try {
+      const errors = harness.errors.length;
+      const report = await harness.app.cleanUp(harness.env);
+      expect(report.oauthPurge).toBeNull();
+      expect(report.storesWiped).toBeGreaterThanOrEqual(1);
+      expect(harness.errors.slice(errors)).toEqual([failure]);
+      harness.errors.splice(errors);
+    } finally {
+      spy.mockRestore();
+    }
+    const members = await harness.local.owner.query(
+      'select 1 from store_ops.store_members where store_id = $1',
+      [storeId],
+    );
+    expect(members.rows).toEqual([]);
   });
 
   it('runs from the scheduled handler', async () => {
