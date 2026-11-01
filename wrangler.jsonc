@@ -8,8 +8,8 @@
   "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
   "observability": { "enabled": true },
   "vars": {
-    // Replace with the deployed origin. Local dev uses .dev.vars instead.
-    "PUBLIC_BASE_URL": "http://localhost:8787",
+    // The deployed origin. Local dev overrides it in .dev.vars.
+    "PUBLIC_BASE_URL": "https://store-ops-mcp.mostafawork5517.workers.dev",
     // Most new demo users (each with a Demo Store) per UTC day, across all clients.
     "DEMO_DAILY_CAP": "200",
   },
@@ -25,14 +25,14 @@
   // Hourly: wipe expired demo stores (audit_log stays) and sweep expired OAuth data.
   "triggers": { "crons": ["17 * * * *"] },
   "kv_namespaces": [
-    // Created at deploy time (after approval). Local dev uses a local simulated namespace.
-    { "binding": "OAUTH_KV", "id": "00000000000000000000000000000000" },
+    // KV namespace "store-ops-mcp-oauth". Local dev uses a local simulated namespace.
+    { "binding": "OAUTH_KV", "id": "57a87ba899314a959fcbf41d5b7c6d53" },
   ],
   "hyperdrive": [
     {
       "binding": "HYPERDRIVE",
-      // Created at deploy time (after approval), pointing at Neon.
-      "id": "00000000000000000000000000000000",
+      // Hyperdrive config "store-ops-mcp": Neon (Postgres 17, Frankfurt) as store_ops_login.
+      "id": "2e48b84771194d598de654e7a1a43a98",
       // Local dev: the compose.yaml Postgres with a store_ops_dev database (see README), reached
       // by the login role that is only a member of store_ops_app. Throwaway credentials.
       "localConnectionString": "postgres://store_ops_login:store_ops_login_local@localhost:54329/store_ops_dev",
