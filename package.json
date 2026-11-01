@@ -22,7 +22,8 @@
     "approve": "tsx scripts/approve.ts",
     "db:up": "docker compose up -d --wait",
     "db:down": "docker compose down --volumes",
-    "db:migrate": "tsx scripts/migrate.ts"
+    "db:migrate": "tsx scripts/migrate.ts",
+    "e2e:local": "tsx scripts/e2e-local.ts"
   },
   "dependencies": {
     "@cloudflare/workers-oauth-provider": "1.2.4",
