@@ -12,6 +12,7 @@ export default defineConfig({
     include: [
       'tests/pg/**/*.test.ts',
       'tests/rls.test.ts',
+      'tests/demo-expiry.test.ts',
       'tests/users.test.ts',
       'tests/seed.test.ts',
       'tests/read-tools.test.ts',

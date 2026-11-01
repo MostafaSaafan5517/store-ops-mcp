@@ -93,36 +93,58 @@ export function hostCookie(name: string, value: string, maxAgeSeconds: number): 
   return `${name}=${value}; Path=/; Secure; HttpOnly; SameSite=Lax; Max-Age=${Math.max(0, Math.floor(maxAgeSeconds))}`;
 }
 
+function sessionPayload(payload: unknown): Session | undefined {
+  const session = payload as Partial<Session> | undefined;
+  if (
+    !session ||
+    typeof session.userId !== 'string' ||
+    !isUuid(session.userId) ||
+    typeof session.storeId !== 'string' ||
+    !isUuid(session.storeId) ||
+    (session.kind !== 'github' && session.kind !== 'demo') ||
+    typeof session.expiresAt !== 'number'
+  ) {
+    return undefined;
+  }
+  return {
+    userId: session.userId,
+    storeId: session.storeId,
+    kind: session.kind,
+    expiresAt: session.expiresAt,
+  };
+}
+
 export async function readSession(
   signer: Signer,
   request: Request,
   now: Date,
 ): Promise<Session | undefined> {
-  const payload = (await signer.unseal('session', readCookie(request, SESSION_COOKIE))) as
-    Partial<Session> | undefined;
-  if (
-    !payload ||
-    typeof payload.userId !== 'string' ||
-    !isUuid(payload.userId) ||
-    typeof payload.storeId !== 'string' ||
-    !isUuid(payload.storeId) ||
-    (payload.kind !== 'github' && payload.kind !== 'demo') ||
-    typeof payload.expiresAt !== 'number' ||
-    payload.expiresAt <= now.getTime()
-  ) {
-    return undefined;
-  }
-  return {
-    userId: payload.userId,
-    storeId: payload.storeId,
-    kind: payload.kind,
-    expiresAt: payload.expiresAt,
-  };
+  const session = sessionPayload(
+    await signer.unseal('session', readCookie(request, SESSION_COOKIE)),
+  );
+  return session && session.expiresAt > now.getTime() ? session : undefined;
 }
+
+/** True when the browser still holds a genuine demo session that has ended. */
+export async function sessionEndedDemo(
+  signer: Signer,
+  request: Request,
+  now: Date,
+): Promise<boolean> {
+  const session = sessionPayload(
+    await signer.unseal('session', readCookie(request, SESSION_COOKIE)),
+  );
+  return session?.kind === 'demo' && session.expiresAt <= now.getTime();
+}
+
+/** How long after a demo ends the browser keeps its cookie, to say why it was signed out. */
+const ENDED_DEMO_NOTICE_MS = 7 * 24 * 60 * 60_000;
 
 export async function sessionCookie(signer: Signer, session: Session, now: Date): Promise<string> {
   const value = await signer.seal('session', session);
-  return hostCookie(SESSION_COOKIE, value, (session.expiresAt - now.getTime()) / 1000);
+  const keepUntil =
+    session.kind === 'demo' ? session.expiresAt + ENDED_DEMO_NOTICE_MS : session.expiresAt;
+  return hostCookie(SESSION_COOKIE, value, (keepUntil - now.getTime()) / 1000);
 }
 
 export function clearSessionCookie(): string {

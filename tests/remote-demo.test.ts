@@ -1,0 +1,205 @@
+import type { ExecutionContext, ScheduledController } from '@cloudflare/workers-types';
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+import { OAUTH_PURGE_CURSOR_KEY } from '../src/remote/app.js';
+import {
+  authorizeUrl,
+  BASE_URL,
+  Browser,
+  connectDemoUser,
+  createHarness,
+  demoSignIn,
+  hiddenField,
+  MCP_URL,
+  newAuthorizeRequest,
+  registerClient,
+  CLAUDE_CALLBACK,
+  tokenRequest,
+  type Harness,
+  type TokenResponse,
+} from './support/remote-harness.js';
+
+const HOUR = 60 * 60_000;
+
+let harness: Harness;
+
+beforeAll(async () => {
+  harness = await createHarness();
+});
+
+afterAll(async () => {
+  await harness.close();
+});
+
+afterEach(() => {
+  vi.useRealTimers();
+  harness.limiter.allow = true;
+});
+
+async function demoUserCount(target: Harness): Promise<number> {
+  const { rows } = await target.local.owner.query<{ n: number }>(
+    "select count(*)::int as n from store_ops.users where kind = 'demo'",
+  );
+  return rows[0]?.n ?? -1;
+}
+
+async function signInPage(target: Harness, browser: Browser): Promise<string> {
+  const clientId = await registerClient(target, [CLAUDE_CALLBACK]);
+  const page = await browser.fetch(
+    await authorizeUrl(newAuthorizeRequest(clientId, CLAUDE_CALLBACK)),
+  );
+  return page.text();
+}
+
+async function postDemoLogin(
+  browser: Browser,
+  html: string,
+  headers: Record<string, string> = {},
+): Promise<Response> {
+  return browser.fetch('/login/demo', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/x-www-form-urlencoded',
+      Origin: BASE_URL,
+      ...headers,
+    },
+    body: new URLSearchParams({
+      csrf: hiddenField(html, 'csrf'),
+      return_to: hiddenField(html, 'return_to'),
+    }).toString(),
+  });
+}
+
+async function tokenProps(accessToken: string): Promise<{ userId: string; storeId: string }> {
+  const token = await harness.env.OAUTH_PROVIDER?.unwrapToken<{
+    userId: string;
+    storeId: string;
+  }>(accessToken);
+  if (!token) throw new Error('token not found');
+  return token.grant.props;
+}
+
+describe('rate limits on "Try the demo"', () => {
+  it('limits each client address and answers 429 without creating a user', async () => {
+    const browser = new Browser(harness);
+    const html = await signInPage(harness, browser);
+    harness.limiter.allow = false;
+    const before = await demoUserCount(harness);
+    const response = await postDemoLogin(browser, html, { 'CF-Connecting-IP': '203.0.113.7' });
+    expect(response.status).toBe(429);
+    expect(response.headers.get('retry-after')).toBe('60');
+    expect(await response.text()).toContain('Please wait a minute');
+    expect(harness.limiter.keys.at(-1)).toBe('demo-login:203.0.113.7');
+    expect(await demoUserCount(harness)).toBe(before);
+  });
+
+  it('stops new demos once the daily cap is reached', async () => {
+    const capped = await createHarness({ demoDailyCap: 0 });
+    try {
+      const browser = new Browser(capped);
+      const html = await signInPage(capped, browser);
+      const response = await postDemoLogin(browser, html);
+      expect(response.status).toBe(429);
+      const retryAfter = Number(response.headers.get('retry-after'));
+      expect(retryAfter).toBeGreaterThan(0);
+      expect(retryAfter).toBeLessThanOrEqual(24 * 60 * 60);
+      const text = await response.text();
+      expect(text).toContain('limit of new demos is reached');
+      expect(text).toContain('sign in with GitHub');
+      expect(await demoUserCount(capped)).toBe(0);
+    } finally {
+      await capped.close();
+    }
+  });
+});
+
+describe('demo expiry on the remote server', () => {
+  it('tells a returning browser at sign-in that the demo expired', async () => {
+    const browser = new Browser(harness);
+    const clientId = await registerClient(harness, [CLAUDE_CALLBACK]);
+    const url = await authorizeUrl(newAuthorizeRequest(clientId, CLAUDE_CALLBACK));
+    await demoSignIn(browser, url);
+    const signedIn = await browser.fetch(url);
+    expect(await signedIn.text()).toContain('Allow');
+
+    vi.useFakeTimers({ toFake: ['Date'], now: Date.now() + 24 * HOUR + 60_000 });
+    const page = await browser.fetch(url);
+    const html = await page.text();
+    expect(html).toContain('Your demo expired');
+    expect(html).toContain('Try the demo');
+
+    const fresh = await new Browser(harness).fetch(url);
+    expect(await fresh.text()).not.toContain('Your demo expired');
+  });
+
+  it('refuses a still valid access token once the demo expired', async () => {
+    const { tokens, request } = await connectDemoUser(harness, 'store:read');
+    const start = Date.now();
+    vi.useFakeTimers({ toFake: ['Date'], now: start + 23.5 * HOUR });
+    const refreshed = await tokenRequest(harness, {
+      grant_type: 'refresh_token',
+      refresh_token: tokens.refresh_token,
+      client_id: request.clientId,
+    });
+    expect(refreshed.status).toBe(200);
+    const late = (await refreshed.json()) as TokenResponse;
+
+    vi.setSystemTime(start + 24 * HOUR + 60_000);
+    const response = await harness.fetch(MCP_URL, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${late.access_token}`,
+        'Content-Type': 'application/json',
+        Accept: 'application/json, text/event-stream',
+      },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list' }),
+    });
+    expect(response.status).toBe(401);
+    const challenge = response.headers.get('www-authenticate') ?? '';
+    expect(challenge).toContain('error="invalid_token"');
+    expect(challenge).toContain('The demo expired');
+  });
+});
+
+describe('scheduled cleanup', () => {
+  it('wipes expired demo stores, revokes their grants and sweeps OAuth data', async () => {
+    const { tokens, request } = await connectDemoUser(harness, 'store:read');
+    const { userId, storeId } = await tokenProps(tokens.access_token);
+    const oauth = harness.env.OAUTH_PROVIDER;
+    if (!oauth) throw new Error('OAUTH_PROVIDER is missing');
+    expect((await oauth.listUserGrants(userId)).items).toHaveLength(1);
+    await harness.local.owner.query(
+      "update store_ops.stores set expires_at = now() - interval '1 minute' where id = $1",
+      [storeId],
+    );
+
+    const report = await harness.app.cleanUp(harness.env);
+    expect(report.storesWiped).toBeGreaterThanOrEqual(1);
+    expect(report.grantsRevoked).toBeGreaterThanOrEqual(1);
+    expect(report.oauthPurge.done).toBe(true);
+    expect((await oauth.listUserGrants(userId)).items).toEqual([]);
+    expect(await harness.kv.get(OAUTH_PURGE_CURSOR_KEY)).toBeNull();
+    const members = await harness.local.owner.query(
+      'select 1 from store_ops.store_members where store_id = $1',
+      [storeId],
+    );
+    expect(members.rows).toEqual([]);
+
+    const refresh = await tokenRequest(harness, {
+      grant_type: 'refresh_token',
+      refresh_token: tokens.refresh_token,
+      client_id: request.clientId,
+    });
+    expect(refresh.status).toBe(400);
+  });
+
+  it('runs from the scheduled handler', async () => {
+    const controller = {
+      scheduledTime: Date.now(),
+      cron: '17 * * * *',
+      noRetry: () => undefined,
+    } as ScheduledController;
+    const ctx = { waitUntil: () => undefined } as unknown as ExecutionContext;
+    await expect(harness.app.scheduled(controller, harness.env, ctx)).resolves.toBeUndefined();
+    expect(harness.errors).toEqual([]);
+  });
+});

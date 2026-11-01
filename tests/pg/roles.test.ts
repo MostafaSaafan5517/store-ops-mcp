@@ -227,36 +227,55 @@ describe('the schema owner (not a superuser, no BYPASSRLS)', () => {
 });
 
 describe('roles and policies stay as designed', () => {
-  it('store_ops_app and store_ops_definer are members of no role and cannot bypass RLS', async () => {
+  it('store_ops_app, store_ops_definer and store_ops_janitor are members of no role and cannot bypass RLS', async () => {
     const { rows } = await local.owner.query<{ role: string; bypass: boolean; member_of: string }>(
       `select r.rolname as role, r.rolbypassrls as bypass,
               (select count(*) from pg_auth_members m where m.member = r.oid) as member_of
-       from pg_roles r where r.rolname in ('store_ops_app', 'store_ops_definer')
+       from pg_roles r
+       where r.rolname in ('store_ops_app', 'store_ops_definer', 'store_ops_janitor')
        order by r.rolname`,
     );
     expect(rows).toEqual([
       { role: 'store_ops_app', bypass: false, member_of: '0' },
       { role: 'store_ops_definer', bypass: false, member_of: '0' },
+      { role: 'store_ops_janitor', bypass: false, member_of: '0' },
     ]);
   });
 
-  it('every policy is for store_ops_app, except the narrow definer policies', async () => {
+  it('every policy is for store_ops_app, except the narrow definer and janitor policies', async () => {
     const { rows } = await local.owner.query<{ policy: string; roles: string }>(
       `select policyname as policy, array_to_string(roles, ',') as roles
        from pg_policies
        where schemaname = 'store_ops' and roles <> array['store_ops_app']::name[]
        order by policyname`,
     );
-    expect(rows).toEqual(
-      [
+    const janitorTables = [
+      'approvals',
+      'customers',
+      'order_items',
+      'order_notes',
+      'orders',
+      'products',
+      'refunds',
+      'store_members',
+    ];
+    const expected = [
+      ...[
         'store_members_definer_insert',
         'store_members_definer_select',
         'stores_definer_insert',
+        'stores_definer_select',
         'users_definer_insert',
         'users_definer_select',
         'users_definer_update',
       ].map((policy) => ({ policy, roles: 'store_ops_definer' })),
-    );
+      ...[
+        ...janitorTables.flatMap((table) => [`${table}_janitor_delete`, `${table}_janitor_select`]),
+        'stores_janitor_select',
+        'stores_janitor_update',
+      ].map((policy) => ({ policy, roles: 'store_ops_janitor' })),
+    ].sort((a, b) => (a.policy < b.policy ? -1 : a.policy > b.policy ? 1 : 0));
+    expect(rows).toEqual(expected);
   });
 
   it('the definer role holds only the table privileges its functions need', async () => {
@@ -291,7 +310,7 @@ describe('the security definer role', () => {
     ]);
   });
 
-  it('owns exactly the security definer functions', async () => {
+  it('owns exactly the security definer functions, except the janitor purge', async () => {
     const { rows } = await local.owner.query<{ name: string; owner: string }>(
       `select p.proname as name, r.rolname as owner
        from pg_proc p join pg_roles r on r.oid = p.proowner
@@ -299,10 +318,79 @@ describe('the security definer role', () => {
        where n.nspname = 'store_ops' and p.prosecdef
        order by p.proname`,
     );
-    expect(rows).toEqual(
-      ['create_demo_user', 'create_store', 'ensure_owned_store', 'is_member', 'sign_in_github'].map(
-        (name) => ({ name, owner: 'store_ops_definer' }),
-      ),
+    expect(rows).toEqual([
+      ...['create_demo_user', 'create_store', 'ensure_owned_store', 'is_member'].map((name) => ({
+        name,
+        owner: 'store_ops_definer',
+      })),
+      { name: 'purge_expired_demo_stores', owner: 'store_ops_janitor' },
+      { name: 'sign_in_github', owner: 'store_ops_definer' },
+    ]);
+  });
+
+  it('reads only the id and expiry of stores', async () => {
+    const { rows } = await local.owner.query<{ col: string }>(
+      `select column_name || ':' || privilege_type as col
+       from information_schema.role_column_grants
+       where grantee = 'store_ops_definer' and table_name = 'stores' and privilege_type = 'SELECT'
+       order by column_name`,
     );
+    expect(rows.map((row) => row.col)).toEqual(['expires_at:SELECT', 'id:SELECT']);
+  });
+});
+
+describe('the janitor role (expired demo store cleanup)', () => {
+  it('has no login, no BYPASSRLS and owns no table', async () => {
+    const { rows } = await local.owner.query<Record<string, unknown>>(
+      `select rolcanlogin, rolbypassrls, rolsuper,
+              (select count(*) from pg_class c where c.relowner = r.oid) as tables
+       from pg_roles r where rolname = 'store_ops_janitor'`,
+    );
+    expect(rows).toEqual([
+      { rolcanlogin: false, rolbypassrls: false, rolsuper: false, tables: '0' },
+    ]);
+  });
+
+  it('can delete from store tables but has no access to audit_log or users', async () => {
+    const { rows } = await local.owner.query<{ grant: string }>(
+      `select table_name || ':' || string_agg(privilege_type, ',' order by privilege_type) as grant
+       from information_schema.role_table_grants
+       where grantee = 'store_ops_janitor'
+       group by table_name order by table_name`,
+    );
+    expect(rows.map((row) => row.grant)).toEqual(
+      [
+        'approvals',
+        'customers',
+        'order_items',
+        'order_notes',
+        'orders',
+        'products',
+        'refunds',
+        'store_members',
+      ].map((table) => `${table}:DELETE,SELECT`),
+    );
+  });
+
+  it('cannot be reached from the login role', async () => {
+    await expect(login.query('set role store_ops_janitor')).rejects.toThrow(/permission denied/);
+  });
+
+  it('deletes nothing of a store that has not expired, even as the janitor', async () => {
+    const owner = await connectAs(OWNER_ROLE);
+    try {
+      await owner.query('begin');
+      await owner.query('set local role store_ops_janitor');
+      const deleted = await owner.query('delete from store_ops.orders');
+      expect(deleted.rowCount).toBe(0);
+      await owner.query('rollback');
+    } finally {
+      await owner.end();
+    }
+    expect(
+      await withPrincipal(local.app, storeA, (tx) =>
+        tx.query<{ n: number }>('select count(*)::int as n from store_ops.orders'),
+      ).then((result) => result.rows[0]?.n),
+    ).toBe(1);
   });
 });

@@ -25,8 +25,20 @@ export interface GithubCall {
   authorization: string | null;
 }
 
+/** Stands in for the Rate Limiting binding: records keys, allows while `allow` is true. */
+export class FakeRateLimiter {
+  allow = true;
+  readonly keys: string[] = [];
+
+  limit(options: { key: string }): Promise<{ success: boolean }> {
+    this.keys.push(options.key);
+    return Promise.resolve({ success: this.allow });
+  }
+}
+
 export interface Harness {
   local: TestDatabase;
+  limiter: FakeRateLimiter;
   kv: MemoryKV;
   env: RemoteEnv;
   app: RemoteApp<RemoteEnv>;
@@ -67,9 +79,14 @@ function bodyText(body: RequestInit['body']): string {
 }
 
 export async function createHarness(
-  options: { github?: boolean; githubUser?: { id: number; login: string } } = {},
+  options: {
+    github?: boolean;
+    githubUser?: { id: number; login: string };
+    demoDailyCap?: number;
+  } = {},
 ): Promise<Harness> {
   const local = await openTestDatabase();
+  const limiter = new FakeRateLimiter();
   const kv = new MemoryKV();
   const errors: unknown[] = [];
   const githubCalls: GithubCall[] = [];
@@ -96,6 +113,8 @@ export async function createHarness(
     OAUTH_KV: kv as unknown as RemoteEnv['OAUTH_KV'],
     PUBLIC_BASE_URL: BASE_URL,
     SESSION_SECRET: 'test-only-session-secret-0123456789abcdef',
+    DEMO_LOGIN_LIMITER: limiter,
+    DEMO_DAILY_CAP: String(options.demoDailyCap ?? 1000),
     ...(options.github === false
       ? {}
       : { GITHUB_CLIENT_ID: 'test-github-client', GITHUB_CLIENT_SECRET: 'test-github-secret' }),
@@ -108,6 +127,7 @@ export async function createHarness(
   });
   return {
     local,
+    limiter,
     kv,
     env,
     app,

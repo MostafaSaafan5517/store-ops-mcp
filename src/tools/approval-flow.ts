@@ -20,10 +20,16 @@ import {
   type ApprovalDecision,
   type WriteToolName,
 } from '../approvals.js';
-import { isUuid, withPrincipal } from '../db/principal.js';
+import { isUuid } from '../db/principal.js';
 import type { SqlClient } from '../db/types.js';
 import { ToolError } from '../errors.js';
-import { errorResult, jsonResult, type ToolContext } from './shared.js';
+import {
+  errorResult,
+  jsonResult,
+  toolErrorResult,
+  withOpenStore,
+  type ToolContext,
+} from './shared.js';
 
 /** The checked effect a first call prepares. `effect` is what execution will apply. */
 export interface WritePlan {
@@ -158,8 +164,7 @@ async function executeApproval<Args extends Record<string, unknown>, Result>(
   approvalId: string,
   inChatDecision: ApprovalDecision | undefined,
 ): Promise<Outcome> {
-  return withPrincipal(context.db, context.principal, async (tx) => {
-    const now = context.now();
+  return withOpenStore(context, async (tx, now) => {
     const approval = await lockApproval(tx, approvalId);
     if (!approval) throw notFound(approvalId);
     if (approval.tool !== spec.name) {
@@ -267,13 +272,13 @@ export async function runWrite<Args extends Record<string, unknown>, Result>(
       return outcome.kind === 'result' ? jsonResult(outcome.output) : errorResult(outcome.message);
     }
 
-    const prepared = await withPrincipal(context.db, context.principal, async (tx) => {
+    const prepared = await withOpenStore(context, async (tx, now) => {
       const plan = await spec.plan(tx, args);
       const approval = await createApproval(
         tx,
         context.principal,
         { tool: spec.name, args, argsHash, summary: { text: plan.summary, effect: plan.effect } },
-        context.now(),
+        now,
       );
       return { ...approval, summary: plan.summary };
     });
@@ -310,8 +315,6 @@ export async function runWrite<Args extends Record<string, unknown>, Result>(
       result: null,
     });
   } catch (error) {
-    if (error instanceof ToolError) return errorResult(error.message);
-    context.onError(error);
-    return errorResult('Something went wrong on the server. Please try again.');
+    return toolErrorResult(context, error);
   }
 }

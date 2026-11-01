@@ -3,7 +3,7 @@ import { z } from 'zod';
 import type { ApprovalLinks } from '../approvals.js';
 import { withPrincipal } from '../db/principal.js';
 import type { Database, Principal, SqlClient } from '../db/types.js';
-import { ToolError } from '../errors.js';
+import { StoreClosedError, ToolError } from '../errors.js';
 import type { PaymentsAdapter } from '../payments/types.js';
 
 /** Everything a tool needs. The principal comes from auth, never from tool arguments. */
@@ -130,16 +130,44 @@ export function errorResult(message: string): CallToolResult {
   return { content: [{ type: 'text', text: message }], isError: true };
 }
 
+/**
+ * Runs `fn` in the principal's RLS-scoped transaction once the store is known to be open.
+ * An expired demo store is hidden by RLS (database clock) and also refused here by the
+ * server clock, so every tool call stops at the expiry even before the cleanup runs.
+ */
+export function withOpenStore<T>(
+  context: ToolContext,
+  fn: (tx: SqlClient, now: Date) => Promise<T>,
+): Promise<T> {
+  return withPrincipal(context.db, context.principal, async (tx) => {
+    const now = context.now();
+    const { rows } = await tx.query<{ expires_at: unknown }>(
+      'select expires_at from store_ops.stores',
+    );
+    const store = rows[0];
+    if (!store) throw new StoreClosedError();
+    if (store.expires_at !== null && new Date(toIso(store.expires_at)) <= now) {
+      throw new StoreClosedError();
+    }
+    return fn(tx, now);
+  });
+}
+
+/** The error result for a failed tool call. Only `ToolError` messages reach the client. */
+export function toolErrorResult(context: ToolContext, error: unknown): CallToolResult {
+  if (error instanceof ToolError) return errorResult(error.message);
+  context.onError(error);
+  return errorResult('Something went wrong on the server. Please try again.');
+}
+
 /** Runs a read inside the principal's RLS-scoped transaction and maps errors safely. */
 export async function runRead<T extends Record<string, unknown>>(
   context: ToolContext,
   read: (tx: SqlClient) => Promise<T>,
 ): Promise<CallToolResult> {
   try {
-    return jsonResult(await withPrincipal(context.db, context.principal, read));
+    return jsonResult(await withOpenStore(context, read));
   } catch (error) {
-    if (error instanceof ToolError) return errorResult(error.message);
-    context.onError(error);
-    return errorResult('Something went wrong on the server. Please try again.');
+    return toolErrorResult(context, error);
   }
 }

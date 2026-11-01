@@ -81,7 +81,7 @@ export async function serveMcp(
     return invalidToken(input.config, 'This token is not valid for any store.');
   }
   if (principal.demoExpiresAt !== undefined && principal.demoExpiresAt <= input.now().getTime()) {
-    return invalidToken(input.config, 'The demo session ended. Sign in again.');
+    return invalidToken(input.config, 'The demo expired. Connect again to start a new demo.');
   }
   const read = await readJsonBody(request);
   if (read.kind === 'too-large') return new Response('Request body too large', { status: 413 });

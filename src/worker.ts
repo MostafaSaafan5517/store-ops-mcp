@@ -11,8 +11,12 @@ export interface WorkerEnv extends RemoteEnv {
 export default createRemoteApp<WorkerEnv>({
   database: (env) => createPostgresDatabase(hyperdriveConnector(env.HYPERDRIVE.connectionString)),
   onError: (error) => {
-    // Workers Logs collect console output; this is the only place the Worker logs.
+    // Workers Logs collect console output; this file is the only place the Worker logs.
     // eslint-disable-next-line no-console
     console.error('[store-ops-mcp]', error instanceof Error ? error.message : String(error));
+  },
+  onCleanup: (report) => {
+    // eslint-disable-next-line no-console
+    console.log('[store-ops-mcp] cleanup', JSON.stringify(report));
   },
 });

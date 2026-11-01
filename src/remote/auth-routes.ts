@@ -13,6 +13,7 @@ import {
   randomToken,
   readCookie,
   readSession,
+  sessionEndedDemo,
   SESSION_TTL_MS,
   sessionCookie,
   type Session,
@@ -60,8 +61,14 @@ export function grantedScopes(requested: string[]): Scope[] {
   return SCOPES.filter((scope) => asked.has(scope));
 }
 
+export const DEMO_EXPIRED_REASON =
+  'Your demo expired. Demo stores last 24 hours, then their data is deleted. Choose "Try the demo" to start a new one.';
+
 /** The sign-in page, shown before consent or an approval when there is no session. */
 export async function signInPage(context: PageContext, reason: string): Promise<Response> {
+  if (await sessionEndedDemo(context.config.signer, context.request, context.now)) {
+    reason = DEMO_EXPIRED_REASON;
+  }
   const { token, setCookie } = await context.config.csrf.issue(context.request);
   const headers = new Headers();
   if (setCookie) headers.append('Set-Cookie', setCookie);
@@ -198,11 +205,44 @@ async function checkedLoginForm(
   return { returnTo };
 }
 
-/** "Try the demo": a new demo user with a freshly generated Demo Store. */
+/** Seconds until the next UTC midnight, when the daily demo cap resets. */
+function secondsUntilUtcMidnight(now: Date): number {
+  const midnight = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1);
+  return Math.max(1, Math.ceil((midnight - now.getTime()) / 1000));
+}
+
+function tooManyRequests(message: string, retryAfterSeconds: number): Response {
+  const headers = new Headers({ 'Retry-After': String(retryAfterSeconds) });
+  return errorPage(429, 'Too many demo sign-ups', message, headers);
+}
+
+/** Seconds a client waits after hitting the per-client limit (the binding's period). */
+export const DEMO_LOGIN_RETRY_SECONDS = 60;
+
+/**
+ * "Try the demo": a new demo user with a freshly generated Demo Store. Limited per client
+ * address by the Rate Limiting binding (approximate, per Cloudflare location) and, exactly,
+ * by a global daily cap that the database counts.
+ */
 export async function demoLogin(context: PageContext): Promise<Response> {
+  const client = context.request.headers.get('cf-connecting-ip') ?? 'unknown';
+  const { success } = await context.env.DEMO_LOGIN_LIMITER.limit({ key: `demo-login:${client}` });
+  if (!success) {
+    return tooManyRequests(
+      'You started several demos in a short time. Please wait a minute and try again.',
+      DEMO_LOGIN_RETRY_SECONDS,
+    );
+  }
   const checked = await checkedLoginForm(context);
   if ('refused' in checked) return checked.refused;
-  const demo = await createDemoUser(context.db, context.now);
+  const demo = await createDemoUser(context.db, context.now, context.config.demoDailyCap);
+  if (!demo) {
+    return tooManyRequests(
+      "Today's limit of new demos is reached. Please try again after midnight UTC" +
+        (context.config.github ? ', or sign in with GitHub.' : '.'),
+      secondsUntilUtcMidnight(context.now),
+    );
+  }
   return startSession(
     context,
     { userId: demo.userId, kind: 'demo', expiresAt: demo.expiresAt.getTime() },

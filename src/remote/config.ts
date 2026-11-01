@@ -1,6 +1,7 @@
 import type { OAuthHelpers } from '@cloudflare/workers-oauth-provider';
-import type { KVNamespace } from '@cloudflare/workers-types';
+import type { KVNamespace, RateLimit } from '@cloudflare/workers-types';
 import type { Database } from '../db/types.js';
+import type { CleanupReport } from './app.js';
 import { GITHUB_ENDPOINTS, type GithubApp, type GithubEndpoints } from './github.js';
 import { Csrf, Signer } from './session.js';
 
@@ -14,6 +15,10 @@ export interface RemoteEnv {
   GITHUB_CLIENT_ID?: string;
   GITHUB_CLIENT_SECRET?: string;
   STRIPE_SECRET_KEY?: string;
+  /** Rate Limiting binding for "Try the demo", keyed per client address (wrangler.jsonc). */
+  DEMO_LOGIN_LIMITER: RateLimit;
+  /** Most new demo users (and so demo stores) per UTC day, across all clients. */
+  DEMO_DAILY_CAP: string;
   /** Set by the OAuth provider for the non-API handler. */
   OAUTH_PROVIDER?: OAuthHelpers;
 }
@@ -27,6 +32,8 @@ export interface RemoteDeps<Env extends RemoteEnv = RemoteEnv> {
   now?: () => Date;
   /** Unexpected errors. Clients only ever see a generic message. */
   onError?: (error: unknown) => void;
+  /** Receives what each scheduled cleanup did. */
+  onCleanup?: (report: CleanupReport) => void;
 }
 
 export interface RemoteConfig {
@@ -37,6 +44,7 @@ export interface RemoteConfig {
   signer: Signer;
   csrf: Csrf;
   github: GithubApp | undefined;
+  demoDailyCap: number;
 }
 
 function isLoopback(hostname: string): boolean {
@@ -64,8 +72,11 @@ export function readRemoteConfig(
   if (Boolean(clientId) !== Boolean(clientSecret)) {
     throw new Error('Set both GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET, or neither');
   }
+  const cap = env.DEMO_DAILY_CAP?.trim() ?? '';
+  if (!/^\d{1,6}$/.test(cap)) throw new Error('DEMO_DAILY_CAP must be a whole number');
   return {
     baseUrl,
+    demoDailyCap: Number(cap),
     resource: `${baseUrl}/mcp`,
     signer,
     csrf: new Csrf(signer, baseUrl),
@@ -84,6 +95,7 @@ export function readRemoteConfig(
 /** Everything one page request needs. */
 export interface PageContext {
   request: Request;
+  env: RemoteEnv;
   url: URL;
   oauth: OAuthHelpers;
   config: RemoteConfig;

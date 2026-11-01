@@ -21,14 +21,25 @@ export async function signInGithubUser(
   return singleId(db, 'select store_ops.sign_in_github($1, $2) as id', [github.id, github.login]);
 }
 
-/** A fresh demo user that stops working after `DEMO_USER_LIFETIME_MS`. */
+/**
+ * A fresh demo user that stops working after `DEMO_USER_LIFETIME_MS`, or undefined once
+ * `dailyCap` demo users were created today (UTC, counted by the database).
+ */
 export async function createDemoUser(
   db: Database,
   now: Date,
-): Promise<{ userId: string; expiresAt: Date }> {
+  dailyCap: number,
+): Promise<{ userId: string; expiresAt: Date } | undefined> {
+  if (!Number.isSafeInteger(dailyCap) || dailyCap < 0) {
+    throw new Error('dailyCap must be a whole number, zero or more');
+  }
   const expiresAt = new Date(now.getTime() + DEMO_USER_LIFETIME_MS);
-  const userId = await singleId(db, 'select store_ops.create_demo_user($1) as id', [
-    expiresAt.toISOString(),
-  ]);
-  return { userId, expiresAt };
+  const { rows } = await db.transaction((tx) =>
+    tx.query<{ id: string | null }>('select store_ops.create_demo_user($1, $2) as id', [
+      expiresAt.toISOString(),
+      dailyCap,
+    ]),
+  );
+  const userId = rows[0]?.id;
+  return userId ? { userId, expiresAt } : undefined;
 }
