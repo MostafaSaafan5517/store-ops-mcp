@@ -1,9 +1,7 @@
-import { mkdir, readdir, readFile } from 'node:fs/promises';
-import { fileURLToPath } from 'node:url';
+import { mkdir } from 'node:fs/promises';
 import { PGlite } from '@electric-sql/pglite';
+import { migrate } from './migrate.js';
 import { APP_ROLE, type Database } from './types.js';
-
-const MIGRATIONS_DIR = fileURLToPath(new URL('../../migrations/', import.meta.url));
 
 export interface LocalDatabase {
   /** Owner connection. Only for migrations and tests that check owner-level behaviour. */
@@ -11,30 +9,6 @@ export interface LocalDatabase {
   /** App connection: every transaction runs as the non-owner role, so RLS applies. */
   app: Database;
   close(): Promise<void>;
-}
-
-/** Applies every `migrations/*.sql` file not yet recorded, in file name order. */
-export async function migrate(owner: PGlite): Promise<string[]> {
-  await owner.exec(
-    'create table if not exists public.schema_migrations (name text primary key, applied_at timestamptz not null default now())',
-  );
-  const applied = new Set(
-    (await owner.query<{ name: string }>('select name from public.schema_migrations')).rows.map(
-      (row) => row.name,
-    ),
-  );
-  const files = (await readdir(MIGRATIONS_DIR)).filter((file) => file.endsWith('.sql')).sort();
-  const newlyApplied: string[] = [];
-  for (const file of files) {
-    if (applied.has(file)) continue;
-    const sql = await readFile(`${MIGRATIONS_DIR}${file}`, 'utf8');
-    await owner.transaction(async (tx) => {
-      await tx.exec(sql);
-      await tx.query('insert into public.schema_migrations (name) values ($1)', [file]);
-    });
-    newlyApplied.push(file);
-  }
-  return newlyApplied;
 }
 
 /**
