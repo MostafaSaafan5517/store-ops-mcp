@@ -15,6 +15,8 @@ export interface ToolContext {
   onError: (error: unknown) => void;
   payments: PaymentsAdapter;
   approvals: ApprovalLinks;
+  /** Remote server only: where OAuth clients find this resource's metadata. */
+  resourceMetadataUrl?: string;
 }
 
 export const READ_ONLY: ToolAnnotations = {
@@ -126,8 +128,12 @@ export function jsonResult<T extends Record<string, unknown>>(output: T): CallTo
   return { content: [{ type: 'text', text: JSON.stringify(output) }], structuredContent: output };
 }
 
-export function errorResult(message: string): CallToolResult {
-  return { content: [{ type: 'text', text: message }], isError: true };
+export function errorResult(message: string, meta?: Record<string, unknown>): CallToolResult {
+  return {
+    content: [{ type: 'text', text: message }],
+    isError: true,
+    ...(meta ? { _meta: meta } : {}),
+  };
 }
 
 /**
@@ -153,8 +159,24 @@ export function withOpenStore<T>(
   });
 }
 
-/** The error result for a failed tool call. Only `ToolError` messages reach the client. */
+/**
+ * The error result for a failed tool call. On the remote server a closed store also carries
+ * `_meta["mcp/www_authenticate"]`, which OpenAI's Apps SDK documents for auth errors in tool
+ * results, so ChatGPT can offer to connect again.
+ */
 export function toolErrorResult(context: ToolContext, error: unknown): CallToolResult {
+  if (error instanceof StoreClosedError) {
+    return errorResult(
+      error.message,
+      context.resourceMetadataUrl
+        ? {
+            'mcp/www_authenticate': [
+              `Bearer error="invalid_token", error_description="The demo expired. Connect again to start a new demo.", resource_metadata="${context.resourceMetadataUrl}"`,
+            ],
+          }
+        : undefined,
+    );
+  }
   if (error instanceof ToolError) return errorResult(error.message);
   context.onError(error);
   return errorResult('Something went wrong on the server. Please try again.');

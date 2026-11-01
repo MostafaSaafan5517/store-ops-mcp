@@ -10,7 +10,7 @@ import { selectPayments } from '../payments/select.js';
 import { createStoreOpsServer } from '../server.js';
 import type { TokenProps } from './auth-routes.js';
 import type { RemoteConfig, RemoteEnv } from './config.js';
-import { scopesForRequest } from './scopes.js';
+import { scopesForRequest, scopesForTool } from './scopes.js';
 
 /** What the OAuth provider hands the API handler after it validated the token. */
 export interface McpContext {
@@ -99,6 +99,7 @@ export async function serveMcp(
         principal: { userId: principal.userId, storeId: principal.storeId },
         payments,
         approvalBaseUrl: input.config.baseUrl,
+        oauth: { resourceMetadataUrl: protectedResourceMetadataUrl(input.config), scopesForTool },
         now: input.now,
         onError: input.onError,
       }),

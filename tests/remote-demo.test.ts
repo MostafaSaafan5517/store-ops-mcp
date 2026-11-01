@@ -1,6 +1,7 @@
 import type { ExecutionContext, ScheduledController } from '@cloudflare/workers-types';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { OAUTH_PURGE_CURSOR_KEY } from '../src/remote/app.js';
+import { scopesForTool } from '../src/remote/scopes.js';
 import {
   authorizeUrl,
   BASE_URL,
@@ -10,6 +11,7 @@ import {
   demoSignIn,
   hiddenField,
   MCP_URL,
+  mcpClient,
   newAuthorizeRequest,
   registerClient,
   CLAUDE_CALLBACK,
@@ -157,6 +159,68 @@ describe('demo expiry on the remote server', () => {
     const challenge = response.headers.get('www-authenticate') ?? '';
     expect(challenge).toContain('error="invalid_token"');
     expect(challenge).toContain('The demo expired');
+  });
+
+  it('answers a tool call on a hidden store with an OAuth challenge in _meta', async () => {
+    const { tokens } = await connectDemoUser(harness, 'store:read');
+    const { storeId } = await tokenProps(tokens.access_token);
+    await harness.local.owner.query(
+      "update store_ops.stores set expires_at = now() - interval '1 minute' where id = $1",
+      [storeId],
+    );
+    const client = await mcpClient(harness, tokens.access_token);
+    const result = await client.callTool({ name: 'get_stock_levels', arguments: {} });
+    expect(result.isError).toBe(true);
+    const challenges = result._meta?.['mcp/www_authenticate'];
+    expect(Array.isArray(challenges)).toBe(true);
+    const [challenge] = challenges as string[];
+    expect(challenge).toMatch(/^Bearer /);
+    expect(challenge).toContain('error="invalid_token"');
+    expect(challenge).toContain('error_description="');
+    expect(challenge).toContain(
+      `resource_metadata="${BASE_URL}/.well-known/oauth-protected-resource/mcp"`,
+    );
+    await client.close();
+  });
+});
+
+describe('ChatGPT tool metadata', () => {
+  it('declares OAuth securitySchemes with the scopes of each tool, on the wire', async () => {
+    const { tokens } = await connectDemoUser(harness, 'store:read');
+    // Raw request: the SDK client drops fields it does not know, such as securitySchemes.
+    const response = await harness.fetch(MCP_URL, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${tokens.access_token}`,
+        'Content-Type': 'application/json',
+        Accept: 'application/json, text/event-stream',
+        'Mcp-Protocol-Version': '2026-07-28',
+        'Mcp-Method': 'tools/list',
+      },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'tools/list',
+        params: {
+          _meta: {
+            'io.modelcontextprotocol/protocolVersion': '2026-07-28',
+            'io.modelcontextprotocol/clientCapabilities': {},
+            'io.modelcontextprotocol/clientInfo': { name: 'raw-test', version: '0.0.0' },
+          },
+        },
+      }),
+    });
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as {
+      result: { tools: { name: string; securitySchemes?: unknown; annotations?: unknown }[] };
+    };
+    expect(body.result.tools.length).toBe(10);
+    for (const tool of body.result.tools) {
+      expect(tool.securitySchemes, tool.name).toEqual([
+        { type: 'oauth2', scopes: [...scopesForTool(tool.name)] },
+      ]);
+      expect(tool.annotations, tool.name).toBeDefined();
+    }
   });
 });
 

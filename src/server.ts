@@ -8,6 +8,7 @@ import { registerProductTools } from './tools/products.js';
 import { registerSalesTools } from './tools/sales.js';
 import { registerStockWriteTools } from './tools/stock-writes.js';
 import { registerOrderWriteTools } from './tools/order-writes.js';
+import { declareOAuthSecuritySchemes } from './tools/security-schemes.js';
 import type { ToolContext } from './tools/shared.js';
 
 export interface StoreOpsServerOptions {
@@ -20,6 +21,11 @@ export interface StoreOpsServerOptions {
   approvalBaseUrl: string;
   /** Local stdio mode only: decisions from `pnpm run approve`, and the command to show. */
   localApproval?: { inbox: ApprovalInbox; command: (approvalId: string) => string };
+  /**
+   * Remote server only: tools declare OAuth `securitySchemes` with the scopes each one needs,
+   * and auth errors in tool results point at the protected resource metadata.
+   */
+  oauth?: { resourceMetadataUrl: string; scopesForTool: (name: string) => readonly string[] };
   now?: () => Date;
   onError?: (error: unknown) => void;
 }
@@ -51,11 +57,13 @@ export function createStoreOpsServer(options: StoreOpsServerOptions): McpServer 
         ? { inbox: options.localApproval.inbox, localCommand: options.localApproval.command }
         : {}),
     },
+    ...(options.oauth ? { resourceMetadataUrl: options.oauth.resourceMetadataUrl } : {}),
   };
   registerOrderTools(server, context);
   registerProductTools(server, context);
   registerSalesTools(server, context);
   registerStockWriteTools(server, context);
   registerOrderWriteTools(server, context);
+  if (options.oauth) declareOAuthSecuritySchemes(server, options.oauth.scopesForTool);
   return server;
 }
