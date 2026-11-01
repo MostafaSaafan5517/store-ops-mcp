@@ -11,8 +11,10 @@ What it shows: an AI assistant can read a store's data and prepare changes, but 
 until a person approves the exact action, every change is recorded in an append-only audit log,
 and each user only ever sees their own store.
 
-Status: Phase 1 is built and tested locally, on PGlite and on real Postgres 17. The remote
-server is not deployed yet (see [Not verified yet](#not-verified-yet)).
+Status: live demo at **https://store-ops-mcp.mostafawork5517.workers.dev** (MCP endpoint:
+`/mcp`), on Cloudflare Workers with Neon Postgres 17 through Hyperdrive. Tested locally on PGlite
+and Postgres 17, in CI, and end to end against the deployed server (see
+[Verified on the live server](#verified-on-the-live-server) and [Not verified yet](#not-verified-yet)).
 
 ## Architecture
 
@@ -282,16 +284,26 @@ grant store_ops_app to store_ops_login;
 revoke temporary on database <db> from public;
 ```
 
+## Verified on the live server
+
+- **Neon.** Migrations 0001 to 0007 applied as the owner. The app connects as
+  `store_ops_login` (no superuser, no BYPASSRLS, only a member of `store_ops_app`); on Neon it
+  was refused when trying to switch to the owner or definer role, disable RLS, delete from
+  `audit_log`, or create tables.
+- **Hyperdrive and the Worker.** `pnpm e2e:local https://store-ops-mcp.mostafawork5517.workers.dev`
+  passes every step: the 401 challenge, both discovery documents, dynamic client registration,
+  demo sign-in, consent, the PKCE token exchange, `tools/list`, a read tool, and a write tool that
+  is refused until it is approved on the approval page and then runs once.
+- **CI.** GitHub Actions runs typecheck, lint, the PGlite suite and the Postgres 17 suite on
+  every push.
+
 ## Not verified yet
 
-- **Neon.** Migrations and tests ran on Postgres 17 in Docker, not on Neon. Neon's project owner
-  role has BYPASSRLS (per Neon's docs); the schema does not rely on it, but the role setup has
-  not been checked there.
-- **Hyperdrive in production.** Locally `wrangler dev` connects straight to Postgres
-  (`localConnectionString` skips Hyperdrive's pooling and caching).
-- **Real Claude and ChatGPT connections.** Nothing is deployed. The OAuth and ChatGPT
-  requirements were implemented from the specs and docs and tested with local clients only.
-- **CI.** The workflow has never run: the repository has no remote yet.
+- **Real Claude and ChatGPT connections.** The OAuth and ChatGPT requirements were implemented
+  from the specs and docs and tested with a scripted client, not yet from the Claude or ChatGPT
+  apps.
+- **The scheduled cleanup on Cloudflare.** It is deployed (`17 * * * *`) and was tested in
+  `wrangler dev`; its first production run has not been checked yet.
 - **The rate limit in production.** It worked in `wrangler dev` (local simulation: the 6th
   request in a minute got 429); Cloudflare documents it as approximate and per location.
 - **Cron limits.** One run does one OAuth sweep batch of 50, wipes up to 10 stores and revokes
