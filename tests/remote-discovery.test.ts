@@ -18,7 +18,8 @@ describe('remote server discovery', () => {
     const metadata = (await response.json()) as Record<string, unknown>;
     expect(metadata.resource).toBe(MCP_URL);
     expect(metadata.authorization_servers).toEqual([BASE_URL]);
-    expect(metadata.scopes_supported).toEqual(['store:read']);
+    // All scopes: clients such as Claude request exactly these on first sign-in.
+    expect(metadata.scopes_supported).toEqual(['store:read', 'store:write', 'refunds:write']);
     expect(metadata.bearer_methods_supported).toEqual(['header']);
   });
 
@@ -53,7 +54,7 @@ describe('remote server discovery', () => {
     expect(challenge).toContain(
       `resource_metadata="${BASE_URL}/.well-known/oauth-protected-resource/mcp"`,
     );
-    expect(challenge).toContain('scope="store:read"');
+    expect(challenge).toContain('scope="store:read store:write refunds:write"');
   });
 
   it('answers an unknown token with 401 invalid_token', async () => {

@@ -21,7 +21,7 @@ import { readRemoteConfig, type PageContext, type RemoteDeps, type RemoteEnv } f
 import { escapeHtml, htmlResponse } from './html.js';
 import { serveMcp, type McpContext } from './mcp-endpoint.js';
 import { messageBody } from './pages.js';
-import { BASELINE_SCOPE, SCOPES } from './scopes.js';
+import { SCOPES } from './scopes.js';
 
 export const ACCESS_TOKEN_TTL_SECONDS = 60 * 60;
 
@@ -163,7 +163,12 @@ export function createRemoteApp<Env extends RemoteEnv>(deps: RemoteDeps<Env>): R
         authorization_servers: [config.baseUrl],
         resource_name: PRODUCT_NAME,
       },
-      requiredScopes: [BASELINE_SCOPE],
+      // Every scope, so a client's first sign-in asks for all of them. With only store:read here,
+      // Claude requested a read-only token and then reported write tools as "Forbidden" instead
+      // of stepping up (found on the live server, 2026-11-02). Advertised, not enforced: the
+      // consent page still shows the scopes, every write still needs a human approval, and the
+      // per-tool 403 step-up stays for clients that ask for less.
+      requiredScopes: [...SCOPES],
       clientIdMetadataDocumentEnabled: true,
       accessTokenTTL: ACCESS_TOKEN_TTL_SECONDS,
       // Demo users end after 24 hours: their grants stop refreshing then.
