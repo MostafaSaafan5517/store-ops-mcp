@@ -19,6 +19,7 @@ export default defineConfig({
       'tests/sales-summary.test.ts',
       'tests/tool-schemas.test.ts',
       'tests/write-tools.test.ts',
+      'tests/dashboard.test.ts',
       'tests/remote-*.test.ts',
     ],
     exclude: ['node_modules/**'],

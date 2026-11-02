@@ -3,7 +3,16 @@ import prettier from 'eslint-config-prettier';
 import tseslint from 'typescript-eslint';
 
 export default tseslint.config(
-  { ignores: ['node_modules', 'dist', 'coverage', '.data', '.wrangler'] },
+  {
+    ignores: [
+      'node_modules',
+      'dist',
+      'coverage',
+      '.data',
+      '.wrangler',
+      'src/ui/dashboard-html.generated.ts',
+    ],
+  },
   js.configs.recommended,
   ...tseslint.configs.recommendedTypeChecked,
   {

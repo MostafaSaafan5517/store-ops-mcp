@@ -10,7 +10,7 @@
   },
   "packageManager": "pnpm@12.15.0",
   "scripts": {
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p ui",
     "lint": "eslint . --max-warnings 0",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
@@ -23,11 +23,13 @@
     "db:up": "docker compose up -d --wait",
     "db:down": "docker compose down --volumes",
     "db:migrate": "tsx scripts/migrate.ts",
-    "e2e:local": "tsx scripts/e2e-local.ts"
+    "e2e:local": "tsx scripts/e2e-local.ts",
+    "build:ui": "tsx scripts/build-ui.ts --write"
   },
   "dependencies": {
     "@cloudflare/workers-oauth-provider": "1.2.4",
     "@electric-sql/pglite": "0.5.14",
+    "@modelcontextprotocol/ext-apps": "2.0.4",
     "@modelcontextprotocol/server": "2.4.0",
     "pg": "8.23.1",
     "stripe": "23.1.0",
@@ -39,8 +41,10 @@
     "@modelcontextprotocol/client": "2.4.0",
     "@types/node": "^24.19.2",
     "@types/pg": "^8.23.1",
+    "esbuild": "0.28.2",
     "eslint": "10.14.0",
     "eslint-config-prettier": "^10.1.8",
+    "happy-dom": "21.0.4",
     "jiti": "^2.7.0",
     "prettier": "3.9.10",
     "tsx": "4.23.15",

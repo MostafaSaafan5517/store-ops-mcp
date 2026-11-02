@@ -265,7 +265,7 @@ describe('ChatGPT tool metadata', () => {
     const body = (await response.json()) as {
       result: { tools: { name: string; securitySchemes?: unknown; annotations?: unknown }[] };
     };
-    expect(body.result.tools.length).toBe(10);
+    expect(body.result.tools.length).toBe(12);
     for (const tool of body.result.tools) {
       expect(tool.securitySchemes, tool.name).toEqual([
         { type: 'oauth2', scopes: [...scopesForTool(tool.name)] },

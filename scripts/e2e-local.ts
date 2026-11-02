@@ -189,6 +189,16 @@ interface WriteOutput {
   approval: { approval_url: string } | null;
 }
 
+const DASHBOARD_URI = 'ui://store-ops/dashboard';
+
+/** The app-only data tool, called the way the dashboard calls it (same connection and token). */
+async function pendingApprovalIds(client: Client): Promise<string[]> {
+  const result = await client.callTool({ name: 'get_dashboard_data', arguments: {} });
+  expectOk(!result.isError, 'get_dashboard_data failed');
+  const data = result.structuredContent as { pending_approvals: { approval_id: string }[] };
+  return data.pending_approvals.map((approval) => approval.approval_id);
+}
+
 async function tools(browser: Browser, accessToken: string): Promise<void> {
   const client = new Client(
     { name: 'store-ops-e2e', version: '0.0.0' },
@@ -201,7 +211,35 @@ async function tools(browser: Browser, accessToken: string): Promise<void> {
   );
   try {
     const listed = await client.listTools();
-    report('tools/list', listed.tools.length === 10, `${listed.tools.length} tools`);
+    report('tools/list', listed.tools.length === 12, `${listed.tools.length} tools`);
+
+    const uiOf = (name: string) =>
+      listed.tools.find((tool) => tool.name === name)?._meta?.ui as
+        { resourceUri?: string; visibility?: string[] } | undefined;
+    const shown = uiOf('show_store_dashboard');
+    const appOnly = uiOf('get_dashboard_data');
+    report(
+      'dashboard tools metadata',
+      shown?.resourceUri === DASHBOARD_URI &&
+        shown.visibility === undefined &&
+        appOnly?.resourceUri === DASHBOARD_URI &&
+        JSON.stringify(appOnly.visibility) === '["app"]',
+      `show_store_dashboard ${JSON.stringify(shown)}, get_dashboard_data ${JSON.stringify(appOnly)}`,
+    );
+
+    const resource = await client.readResource({ uri: DASHBOARD_URI });
+    const content = resource.contents[0];
+    const html = content && 'text' in content ? content.text : '';
+    const csp = (content?._meta?.ui as { csp?: Record<string, unknown[]> } | undefined)?.csp;
+    report(
+      'dashboard ui:// resource',
+      content?.mimeType === 'text/html;profile=mcp-app' &&
+        html.startsWith('<!doctype html>') &&
+        html.includes(`content="${BASE_URL}/approve/"`) &&
+        csp !== undefined &&
+        Object.values(csp).every((domains) => domains.length === 0),
+      `${content?.mimeType}, ${html.length} characters, csp ${JSON.stringify(csp)}`,
+    );
 
     const stock = await client.callTool({ name: 'get_stock_levels', arguments: {} });
     const products = (
@@ -227,6 +265,13 @@ async function tools(browser: Browser, accessToken: string): Promise<void> {
       arguments: { ...args, approval_id: prepared.approval_id },
     });
     report('write tool before approval', early.isError === true, 'refused, nothing changed');
+
+    const pending = await pendingApprovalIds(client);
+    report(
+      'get_dashboard_data shows the pending approval',
+      pending.includes(prepared.approval_id),
+      `${pending.length} pending: ${pending.join(', ')}`,
+    );
 
     const pageUrl = prepared.approval?.approval_url ?? '';
     const page = await browser.fetch(pageUrl);
@@ -256,6 +301,13 @@ async function tools(browser: Browser, accessToken: string): Promise<void> {
       'stock after approval',
       updated?.stock_on_hand === product.stock_on_hand + 3,
       `${product.sku}: ${product.stock_on_hand} -> ${updated?.stock_on_hand}`,
+    );
+
+    const stillPending = await pendingApprovalIds(client);
+    report(
+      'get_dashboard_data after execution',
+      !stillPending.includes(prepared.approval_id),
+      'the executed approval is no longer pending',
     );
   } finally {
     await client.close();

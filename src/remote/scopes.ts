@@ -16,6 +16,15 @@ export const SCOPE_DESCRIPTIONS: Record<Scope, string> = {
     'Prepare refunds (fake payments, or Stripe test mode). Each refund still needs your approval before it runs.',
 };
 
+/**
+ * The dashboard tools are read tools. get_dashboard_data is called by the app inside the
+ * host, over the same connection and token as the model, so it gets the same check.
+ */
+const DASHBOARD_TOOL_SCOPES = {
+  show_store_dashboard: [BASELINE_SCOPE],
+  get_dashboard_data: [BASELINE_SCOPE],
+} as const satisfies Record<string, readonly Scope[]>;
+
 const WRITE_TOOL_SCOPES: Record<WriteToolName, readonly Scope[]> = {
   adjust_stock: ['store:read', 'store:write'],
   cancel_order: ['store:read', 'store:write'],
@@ -29,9 +38,11 @@ export function isScope(value: string): value is Scope {
 
 /** Every scope a tool call needs. Read tools and unknown names need only the baseline. */
 export function scopesForTool(name: string): readonly Scope[] {
-  return Object.hasOwn(WRITE_TOOL_SCOPES, name)
-    ? WRITE_TOOL_SCOPES[name as WriteToolName]
-    : [BASELINE_SCOPE];
+  if (Object.hasOwn(WRITE_TOOL_SCOPES, name)) return WRITE_TOOL_SCOPES[name as WriteToolName];
+  if (Object.hasOwn(DASHBOARD_TOOL_SCOPES, name)) {
+    return DASHBOARD_TOOL_SCOPES[name as keyof typeof DASHBOARD_TOOL_SCOPES];
+  }
+  return [BASELINE_SCOPE];
 }
 
 function toolCallNames(message: unknown): string[] {

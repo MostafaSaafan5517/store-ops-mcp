@@ -51,6 +51,12 @@ ChatGPT and other MCP clients. Public portfolio project. Everything runs on demo
   refuses an expired store on every tool call); `src/tools/approval-flow.ts` runs every write
   tool through the approval flow; `src/tools/security-schemes.ts` adds ChatGPT's
   `securitySchemes` to `tools/list` on the remote server
+- `src/tools/dashboard.ts`: the MCP App dashboard: `show_store_dashboard` (model and app),
+  `get_dashboard_data` (app only), the `ui://store-ops/dashboard` resource and its data query
+- `ui/dashboard/`: the dashboard view (`index.html` template, `main.ts` with the ext-apps `App`
+  class, own `ui/tsconfig.json` with the DOM lib). `pnpm build:ui` (`scripts/build-ui.ts`,
+  esbuild) inlines it into `src/ui/dashboard-html.generated.ts` (committed, ASCII only, ignored
+  by Prettier and ESLint); `tests/dashboard-ui.test.ts` fails when it is out of date
 - `src/maintenance.ts`: `purgeExpiredDemoStores` (calls the janitor function)
 - `src/payments/`: `PaymentsAdapter`, the fake processor, the Stripe test mode client and
   `selectPayments`
@@ -110,6 +116,25 @@ ChatGPT and other MCP clients. Public portfolio project. Everything runs on demo
   loopback http any port), on top of the provider's exact match to registered URIs.
 - Each user owns exactly one store. `ensureDemoStore` provisions it in one transaction under a
   per-user advisory lock (`store_ops.ensure_owned_store`); a unique index backs this up.
+
+## Dashboard (MCP App)
+
+- Spec: MCP Apps 2026-01-26, package `@modelcontextprotocol/ext-apps` 2.0.4. Tools use
+  `registerAppTool` (it also writes the deprecated flat `ui/resourceUri` key for older hosts),
+  the resource `registerAppResource` with `_meta.ui.csp` all empty on the list entry and the
+  read content.
+- The tools are registered for every client (text summary plus JSON as fallback). Under
+  2026-07-28 there is no initialize to gate on, and the spec only says SHOULD.
+- The server cannot tell an app call from a model call. So the dashboard never approves: no
+  approve tool, no Approve button. Pending approvals open `/approve/<id>` through the host's
+  `ui/open-link`, and only when the link is the prefix the server wrote into the page
+  (`<meta name="store-ops-approval-prefix">`, filled in `dashboardHtml`) plus a UUID.
+- In the view, store text goes through `textContent` only. No `innerHTML`,
+  `insertAdjacentHTML` or HTML strings with data. Host fonts are not applied (they could load
+  from outside); host theme and style variables are, with fallbacks.
+- After editing `ui/dashboard/`, run `pnpm build:ui` and commit the generated file.
+- Adding an app tool: add it to `scopes.ts` like any tool; app-only tools still get the scope
+  check and `withOpenStore`.
 
 ## Approval flow (write tools)
 
@@ -257,3 +282,9 @@ scripts typed with JSDoc and checked by `tsc` and ESLint like the rest of the re
    (migrations 0006, 0007), cron with `purgeExpiredData`, rate limit and daily caps on "Try the demo",
    ChatGPT `securitySchemes` and `_meta["mcp/www_authenticate"]`, `pnpm e2e:local` (passed
    against wrangler dev and the compose Postgres), public README, `docs/demo-script.md`.
+
+## Run plan (Phase 2)
+
+1. Run 1 (2026-11-02 on `feat/mcp-app-dashboard`, not merged): order dashboard as an MCP App
+   (`show_store_dashboard`, `get_dashboard_data`, `ui://store-ops/dashboard`), DOM test with a
+   fake host, e2e steps, `docs/demo-script-dashboard.md`. Not yet rendered in Claude.
