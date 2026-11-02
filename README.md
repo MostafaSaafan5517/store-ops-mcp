@@ -298,12 +298,14 @@ revoke temporary on database <db> from public;
   is refused until it is approved on the approval page and then runs once.
 - **CI.** GitHub Actions runs typecheck, lint, the PGlite suite and the Postgres 17 suite on
   every push.
+- **Claude.** Connected as a custom connector with "Sign in with GitHub" and the consent page.
+  A read tool returned the low stock list, and `adjust_stock` returned an approval link; after
+  approval on the page, the second call ran once (stock 0 to 5) and wrote one audit row.
 
 ## Not verified yet
 
-- **Real Claude and ChatGPT connections.** The OAuth and ChatGPT requirements were implemented
-  from the specs and docs and tested with a scripted client, not yet from the Claude or ChatGPT
-  apps.
+- **ChatGPT.** The ChatGPT requirements were implemented from OpenAI's docs and tested with a
+  scripted client, not from the ChatGPT app.
 - **The scheduled cleanup on Cloudflare.** It is deployed (`17 * * * *`) and was tested in
   `wrangler dev`; its first production run has not been checked yet.
 - **The rate limit in production.** It worked in `wrangler dev` (local simulation: the 6th
@@ -313,7 +315,6 @@ revoke temporary on database <db> from public;
   plan is not measured.
 - **Parallel sign-ups.** The daily caps are counted under an advisory lock, but there is no
   parallel-connection test for them yet (as there is for store provisioning).
-- GitHub sign-in was tested against a fake GitHub only.
 
 ## License
 
