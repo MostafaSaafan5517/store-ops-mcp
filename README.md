@@ -87,7 +87,9 @@ Write tools never change anything on the first call.
    user, the store, the tool and a SHA-256 hash of the exact arguments. It expires in 10
    minutes.
 2. The tool returns `approval_required` with a plain summary of the exact effect and an
-   `approval_url`. Clients that support form elicitation get an in-chat confirmation instead.
+   `approval_url`. An in-chat confirmation (form elicitation) exists but is off by default
+   (`inChatConfirmation`): the Claude desktop app declared elicitation yet showed nothing, so the
+   call stalled. The approval link works in every client.
 3. The person opens the link, signs in if needed, reads the summary and clicks Approve or
    Reject. Locally, `pnpm run approve <approval_id>` does the same.
 4. The assistant calls the tool again with the same arguments and the `approval_id`. In one

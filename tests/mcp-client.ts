@@ -22,6 +22,8 @@ export interface ConnectOptions {
   payments?: PaymentsAdapter;
   /** Declares form elicitation and answers every confirmation with this handler. */
   elicit?: (message: string) => ElicitResult;
+  /** Server side: ask in chat when the client declares elicitation. Defaults to Boolean(elicit). */
+  inChatConfirmation?: boolean;
   localApproval?: { inbox: ApprovalInbox; command: (approvalId: string) => string };
 }
 
@@ -52,6 +54,7 @@ export async function connectClient(
         payments,
         approvalBaseUrl: APPROVAL_BASE_URL,
         ...(options.localApproval ? { localApproval: options.localApproval } : {}),
+        inChatConfirmation: options.inChatConfirmation ?? Boolean(options.elicit),
         now: clock,
         onError: (e) => errors.push(e),
       }),

@@ -284,7 +284,7 @@ export async function runWrite<Args extends Record<string, unknown>, Result>(
     });
     const expiresAt = prepared.expiresAt.toISOString();
 
-    if (supportsFormElicitation(ctx)) {
+    if (context.approvals.inChat === true && supportsFormElicitation(ctx)) {
       return inputRequired({
         inputRequests: {
           [CONFIRM_KEY]: inputRequired.elicit({

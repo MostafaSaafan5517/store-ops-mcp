@@ -117,10 +117,12 @@ ChatGPT and other MCP clients. Public portfolio project. Everything runs on demo
   writes); `execute` applies the stored effect and re-checks it against current data.
 - First call (no `approval_id`): stores a pending approval bound to store, user, tool and
   `hashArgs` (SHA-256 of canonical JSON, keys sorted) of the arguments, expiring in 10 minutes.
-  If the request declares form elicitation (2026-07-28 envelope), the tool returns
-  `input_required` with a confirm request; the retry carries the approval id in
-  `requestState` (untrusted, used only as a lookup key). Otherwise it returns
-  `approval_required` with `approval_url` (`<approvalBaseUrl>/approve/<id>`).
+  It returns `approval_required` with `approval_url` (`<approvalBaseUrl>/approve/<id>`).
+  Only with `inChatConfirmation: true` (off by default, and off in the Worker) and a request
+  that declares form elicitation does it return `input_required` with a confirm request; the
+  retry carries the approval id in `requestState` (untrusted, used only as a lookup key). It is
+  off because the Claude desktop app declared elicitation but showed the user nothing
+  (2026-11-02).
 - Second call (same arguments plus `approval_id`) runs only if approved, in one transaction:
   lock the approval (`for update`), check tool, hash, status and expiry, execute, insert one
   `audit_log` row, mark executed with the stored result. A repeat returns the stored result.

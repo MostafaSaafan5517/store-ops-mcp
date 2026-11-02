@@ -22,6 +22,12 @@ export interface StoreOpsServerOptions {
   /** Local stdio mode only: decisions from `pnpm run approve`, and the command to show. */
   localApproval?: { inbox: ApprovalInbox; command: (approvalId: string) => string };
   /**
+   * Also ask in chat (form elicitation) when a client declares it. Off by default: a client
+   * can declare elicitation and still show the user nothing, which stalls the call; the
+   * approval link always works.
+   */
+  inChatConfirmation?: boolean;
+  /**
    * Remote server only: tools declare OAuth `securitySchemes` with the scopes each one needs,
    * and auth errors in tool results point at the protected resource metadata.
    */
@@ -56,6 +62,7 @@ export function createStoreOpsServer(options: StoreOpsServerOptions): McpServer 
       ...(options.localApproval
         ? { inbox: options.localApproval.inbox, localCommand: options.localApproval.command }
         : {}),
+      inChat: options.inChatConfirmation === true,
     },
     ...(options.oauth ? { resourceMetadataUrl: options.oauth.resourceMetadataUrl } : {}),
   };

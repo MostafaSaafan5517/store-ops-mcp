@@ -598,6 +598,35 @@ describe('add_order_note', () => {
   });
 });
 
+describe('approval link by default', () => {
+  it('sends the approval link even when the client declares elicitation', async () => {
+    // The Claude desktop app declared elicitation but never showed the question (2026-11-02),
+    // so the server must not depend on it unless in-chat confirmation is switched on.
+    const asked: string[] = [];
+    const chat = await connectClient(local.app, storeA, clock, {
+      errors,
+      payments,
+      inChatConfirmation: false,
+      elicit: (message) => {
+        asked.push(message);
+        return { action: 'accept', content: { confirm: true } };
+      },
+    });
+    try {
+      const { sku } = await newOrder();
+      const result = await chat.call('adjust_stock', { sku, quantity_change: 2, reason: 'Found' });
+      expect(result.isError, textOf(result)).toBeFalsy();
+      const output = result.structuredContent as WriteOutput;
+      expect(output.status).toBe('approval_required');
+      expect(asked).toHaveLength(0);
+      expect(await stockOf(sku)).toBe(10);
+      expect(await approvalStatus(output.approval_id)).toBe('pending');
+    } finally {
+      await chat.close();
+    }
+  });
+});
+
 describe('in-chat confirmation (form elicitation, 2026-07-28)', () => {
   it('asks the user with the exact summary and executes once they accept', async () => {
     const messages: string[] = [];

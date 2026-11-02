@@ -262,6 +262,12 @@ export interface ApprovalLinks {
   /** Local stdio mode only: a command that approves from a terminal. */
   localCommand?: (approvalId: string) => string;
   inbox?: ApprovalInbox;
+  /**
+   * Ask in chat (form elicitation) when the client declares it, instead of only sending the
+   * approval link. Off by default: the Claude desktop app declared elicitation but showed the
+   * user nothing, so the call waited until it timed out (2026-11-02). The link works everywhere.
+   */
+  inChat?: boolean;
 }
 
 /** Builds `<base>/approve/<id>` from a configurable base URL. */
