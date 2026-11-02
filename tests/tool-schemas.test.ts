@@ -4,12 +4,14 @@ import { createEmptyStore, openTestDatabase, USER_A, type TestDatabase } from '.
 import { connectClient, textOf, type TestClient } from './mcp-client.js';
 
 const READ_TOOLS = [
+  'get_dashboard_data',
   'get_order',
   'get_sales_summary',
   'get_stock_levels',
   'list_orders',
   'search_orders',
   'search_products',
+  'show_store_dashboard',
 ];
 
 const WRITE_TOOLS = ['add_order_note', 'adjust_stock', 'cancel_order', 'issue_refund'];

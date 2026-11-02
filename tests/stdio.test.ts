@@ -57,7 +57,7 @@ describe('stdio server', () => {
       expect(client.getNegotiatedProtocolVersion()).toBe('2026-07-28');
       const { tools } = await client.listTools();
       expect(tools.map((tool) => tool.name)).toContain('list_orders');
-      expect(tools).toHaveLength(10);
+      expect(tools).toHaveLength(12);
 
       const stock = await client.callTool({ name: 'get_stock_levels', arguments: { limit: 5 } });
       expect(stock.isError).toBeFalsy();
@@ -78,6 +78,16 @@ describe('stdio server', () => {
       const summary = await client.callTool({ name: 'get_stock_levels', arguments: {} });
       expect(summary.structuredContent).toMatchObject({ summary: { product_count: 40 } });
       expect(stderr()).toMatch(/Opened Demo Store/);
+
+      // A 2025-era client sees the same app metadata and gets the text fallback.
+      const { tools } = await client.listTools();
+      const dashboard = tools.find((tool) => tool.name === 'show_store_dashboard');
+      expect(dashboard?._meta?.ui).toEqual({ resourceUri: 'ui://store-ops/dashboard' });
+      const shown = await client.callTool({ name: 'show_store_dashboard', arguments: {} });
+      expect(shown.isError).toBeFalsy();
+      expect(shown.content[0]).toMatchObject({ type: 'text' });
+      const resource = await client.readResource({ uri: 'ui://store-ops/dashboard' });
+      expect(resource.contents[0]?.mimeType).toBe('text/html;profile=mcp-app');
       expect(firstStoreId).toBeDefined();
       expect(storeIdIn(stderr())).toBe(firstStoreId);
     });

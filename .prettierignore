@@ -4,3 +4,4 @@ coverage
 .data
 pnpm-lock.yaml
 .wrangler
+src/ui/dashboard-html.generated.ts
