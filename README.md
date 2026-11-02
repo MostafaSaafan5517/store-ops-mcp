@@ -38,7 +38,7 @@ flowchart LR
     CRON[Cron Trigger<br/>hourly cleanup]
   end
 
-  SERVER[createStoreOpsServer<br/>10 tools + approval flow]
+  SERVER[createStoreOpsServer<br/>12 tools + approval flow<br/>ui:// dashboard resource]
   KV[(Workers KV<br/>OAuth grants and tokens)]
   RL[[Rate Limiting binding]]
   PG[(Postgres with RLS<br/>Neon via Hyperdrive)]
@@ -62,18 +62,20 @@ does the rest.
 
 ## Tools
 
-| Tool                | Kind  | Scopes needed                          | What it does                                                   |
-| ------------------- | ----- | -------------------------------------- | -------------------------------------------------------------- |
-| `list_orders`       | read  | `store:read`                           | Orders, newest first, filtered by status and date range        |
-| `search_orders`     | read  | `store:read`                           | Find orders by number, customer name or email                  |
-| `get_order`         | read  | `store:read`                           | One order with items, notes and refunds                        |
-| `search_products`   | read  | `store:read`                           | Products by name or SKU and/or category                        |
-| `get_stock_levels`  | read  | `store:read`                           | Stock on hand, low stock first                                 |
-| `get_sales_summary` | read  | `store:read`                           | Sales, refunds, net sales and top products for a period        |
-| `adjust_stock`      | write | `store:read store:write`               | Change stock on hand by a number of units, with a reason       |
-| `cancel_order`      | write | `store:read store:write`               | Cancel an unpaid (pending) order and put its stock back        |
-| `add_order_note`    | write | `store:read store:write`               | Add a staff note to an order                                   |
-| `issue_refund`      | write | `store:read store:write refunds:write` | Refund part or all of a paid order through the payment adapter |
+| Tool                   | Kind           | Scopes needed                          | What it does                                                         |
+| ---------------------- | -------------- | -------------------------------------- | -------------------------------------------------------------------- |
+| `list_orders`          | read           | `store:read`                           | Orders, newest first, filtered by status and date range              |
+| `search_orders`        | read           | `store:read`                           | Find orders by number, customer name or email                        |
+| `get_order`            | read           | `store:read`                           | One order with items, notes and refunds                              |
+| `search_products`      | read           | `store:read`                           | Products by name or SKU and/or category                              |
+| `get_stock_levels`     | read           | `store:read`                           | Stock on hand, low stock first                                       |
+| `get_sales_summary`    | read           | `store:read`                           | Sales, refunds, net sales and top products for a period              |
+| `adjust_stock`         | write          | `store:read store:write`               | Change stock on hand by a number of units, with a reason             |
+| `cancel_order`         | write          | `store:read store:write`               | Cancel an unpaid (pending) order and put its stock back              |
+| `add_order_note`       | write          | `store:read store:write`               | Add a staff note to an order                                         |
+| `issue_refund`         | write          | `store:read store:write refunds:write` | Refund part or all of a paid order through the payment adapter       |
+| `show_store_dashboard` | read           | `store:read`                           | Opens the order dashboard (MCP App); text summary and JSON elsewhere |
+| `get_dashboard_data`   | read, app only | `store:read`                           | The dashboard's refresh and period switch (hidden from the model)    |
 
 Read tools carry `readOnlyHint: true`. Write tools carry `destructiveHint` where it applies.
 Lists use opaque cursors and a `limit` of at most 50. Money is always integer cents.
@@ -99,6 +101,35 @@ Write tools never change anything on the first call.
 
 Rejected, expired, already used or mismatched approvals, or approvals of another user or
 store, change nothing and return a clear error.
+
+## Order dashboard (MCP App)
+
+`show_store_dashboard` opens an interactive dashboard inside clients that support the MCP Apps
+extension (`io.modelcontextprotocol/ui`). The tool links to the resource
+`ui://store-ops/dashboard` (`text/html;profile=mcp-app`), one self-contained HTML document with
+its script inlined and an empty CSP: it loads nothing from anywhere.
+
+It shows, for the Demo Store: sales for the last 7, 30 or 90 days (gross, refunds, net, order
+count, average order value, top 5 products), order counts by status, the 10 latest orders, low
+stock and sold out products, and the user's pending approvals in this store. The period
+buttons and Refresh call `get_dashboard_data`, which is visible to the app only
+(`_meta.ui.visibility: ["app"]`) but goes through the same scope check, principal and row level
+security as every other tool.
+
+**Why approvals stay links.** The host proxies the app's tool calls over the same connection and
+token as the assistant, so the server cannot tell a click inside the dashboard from a call the
+model made. There is no approve tool and no Approve button. Each pending approval has an "Open
+approval page" button that asks the host to open the server's own `/approve/<id>` page (the app
+checks the link against the approval prefix the server put in the page, and shows any other
+link as plain text). Approving still needs the signed-in session, the CSRF token and the Origin
+check on that page. After approving, ask the assistant to run the action, then press Refresh.
+
+Store text (customer and product names, approval summaries) is set with `textContent` only.
+Clients without MCP Apps get a short text summary plus the same data as JSON.
+
+The view lives in `ui/dashboard/` and is built with `pnpm build:ui` (esbuild) into
+`src/ui/dashboard-html.generated.ts`, which is committed so the Worker, stdio and the tests
+need no build step. A test fails when that file is out of date.
 
 ## Security model
 
@@ -190,8 +221,9 @@ pnpm e2e:local                               # in a second terminal
 
 `pnpm e2e:local` plays both the MCP client and the person in the browser: the 401 challenge,
 both discovery documents, dynamic client registration, the authorization code flow with PKCE
-through "Try the demo" and consent, `tools/list`, a read tool, a write tool that is refused
-before approval, approved on the approval page and then executed, and one run of the
+through "Try the demo" and consent, `tools/list` with the dashboard metadata, the `ui://`
+dashboard resource, a read tool, a write tool that is refused before approval (and listed by
+`get_dashboard_data` as pending), approved on the approval page and then executed, and one run of the
 scheduled cleanup (`/cdn-cgi/local/scheduled`; `wrangler dev` does not run crons on its own).
 
 Worker settings (`.dev.vars` locally, secrets and vars in Cloudflare):
@@ -304,6 +336,10 @@ revoke temporary on database <db> from public;
 
 ## Not verified yet
 
+- **The dashboard in Claude.** The MCP App was tested with a fake host in a DOM test, scripted
+  MCP clients and `pnpm e2e:local`, not rendered in claude.ai or the desktop app yet.
+- **The dashboard in ChatGPT.** OpenAI's docs say ChatGPT reads the standard `_meta.ui` keys and
+  the MCP Apps bridge; not tried.
 - **ChatGPT.** The ChatGPT requirements were implemented from OpenAI's docs and tested with a
   scripted client, not from the ChatGPT app.
 - **The scheduled cleanup on Cloudflare.** It is deployed (`17 * * * *`) and was tested in
