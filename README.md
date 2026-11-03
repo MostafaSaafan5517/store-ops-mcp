@@ -333,11 +333,17 @@ revoke temporary on database <db> from public;
 - **Claude.** Connected as a custom connector with "Sign in with GitHub" and the consent page.
   A read tool returned the low stock list, and `adjust_stock` returned an approval link; after
   approval on the page, the second call ran once (stock 0 to 5) and wrote one audit row.
+- **The dashboard in claude.ai.** In a normal chat in claude.ai (Chrome), `show_store_dashboard`
+  rendered the MCP App with live demo data: sales cards, orders by status, top products, latest
+  orders, low stock and the approvals section. The 7, 30 and 90 day buttons and Refresh loaded
+  new data through `get_dashboard_data`.
 
 ## Not verified yet
 
-- **The dashboard in Claude.** The MCP App was tested with a fake host in a DOM test, scripted
-  MCP clients and `pnpm e2e:local`, not rendered in claude.ai or the desktop app yet.
+- **The dashboard in the Claude desktop app.** In a Cowork task the tool ran and Claude answered
+  with the text summary, but no interactive view was shown. Normal desktop chats were not tried.
+- **The dashboard's "Open approval page" button in a real client.** It is covered by the DOM
+  test; in the claude.ai test the approval was opened from the link in the chat instead.
 - **The dashboard in ChatGPT.** OpenAI's docs say ChatGPT reads the standard `_meta.ui` keys and
   the MCP Apps bridge; not tried.
 - **ChatGPT.** The ChatGPT requirements were implemented from OpenAI's docs and tested with a
